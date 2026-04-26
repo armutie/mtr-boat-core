@@ -35,7 +35,7 @@ class RadarPygameViz:
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont("consolas", 18)
         self.small_font = pygame.font.SysFont("consolas", 14)
-        self.big_font = pygame.font.SysFont("consolas", 42, bold=True)
+        self.big_font = pygame.font.SysFont("consolas", 26, bold=True)
 
     def reset_clock(self) -> None:
         self.clock.tick()
@@ -103,8 +103,8 @@ class RadarPygameViz:
 
     def _plot_rect(self):
         margin = 28
-        panel_w = 350
-        bottom_h = 92
+        panel_w = 430
+        bottom_h = 48
         return self.pygame.Rect(margin, margin, self.width - panel_w - margin * 2, self.height - bottom_h - margin * 2)
 
     def _world_to_screen(self, x: float, y: float, rect):
@@ -117,19 +117,19 @@ class RadarPygameViz:
         surface = (font or self.font).render(text, True, color)
         self.screen.blit(surface, pos)
 
-    def _draw_bar(self, label: str, value: float, x: int, y: int, color) -> None:
+    def _draw_bar(self, label: str, value: float, x: int, y: int, color, width: int = 250) -> None:
         pygame = self.pygame
         self._draw_text(f"{label:<6} {value:0.2f}", (x, y))
-        bar = pygame.Rect(x, y + 24, 250, 14)
+        bar = pygame.Rect(x, y + 22, width, 12)
         pygame.draw.rect(self.screen, (38, 44, 50), bar, border_radius=3)
         fill = pygame.Rect(bar.left, bar.top, int(bar.width * max(0.0, min(value, 1.0))), bar.height)
         pygame.draw.rect(self.screen, color, fill, border_radius=3)
 
-    def _draw_signed_bar(self, label: str, value: float, x: int, y: int, color) -> None:
+    def _draw_signed_bar(self, label: str, value: float, x: int, y: int, color, width: int = 250) -> None:
         pygame = self.pygame
         value = max(-1.0, min(1.0, value))
         self._draw_text(f"{label:<6} {value:+0.2f}", (x, y))
-        bar = pygame.Rect(x, y + 24, 250, 14)
+        bar = pygame.Rect(x, y + 22, width, 12)
         center = bar.left + bar.width // 2
         pygame.draw.rect(self.screen, (38, 44, 50), bar, border_radius=3)
         pygame.draw.line(self.screen, (120, 132, 144), (center, bar.top - 2), (center, bar.bottom + 2), 1)
@@ -161,13 +161,13 @@ class RadarPygameViz:
         pygame.draw.line(self.screen, (230, 236, 241), left, right, 5)
         pygame.draw.line(self.screen, (230, 236, 241), top, bottom, 4)
         pygame.draw.circle(self.screen, (80, 170, 220), center, 8)
-        self._draw_text("STEER", (cx - 32, cy + radius + 13), (152, 164, 175), self.small_font)
+        self._draw_text("STEER", (cx - 32, cy + radius + 8), (152, 164, 175), self.small_font)
 
     def _draw_velocity_chart(self, rect) -> None:
         pygame = self.pygame
         pygame.draw.rect(self.screen, (18, 24, 30), rect)
         pygame.draw.rect(self.screen, (92, 105, 118), rect, 1)
-        self._draw_text("THROTTLE HISTORY", (rect.left + 8, rect.top + 6), (152, 164, 175), self.small_font)
+        self._draw_text("THROTTLE TRACE", (rect.left + 8, rect.top + 6), (152, 164, 175), self.small_font)
         for i in range(1, 4):
             y = rect.top + int(rect.height * i / 4)
             pygame.draw.line(self.screen, (34, 43, 52), (rect.left, y), (rect.right, y))
@@ -247,9 +247,7 @@ class RadarPygameViz:
         if output is not None:
             rows = [
                 f"Frame: {output.frame_number}",
-                f"Raw points: {len(output.raw_points)}",
-                f"Filtered: {len(output.filtered_points)}",
-                f"Clusters: {len(output.clusters)}",
+                f"Points: {len(output.filtered_points)}/{len(output.raw_points)}  Clusters: {len(output.clusters)}",
                 f"Blocked: {str(output.front_blocked).upper()}",
                 f"Throttle: {output.throttle:0.2f} -> {output.target_throttle:0.2f}",
                 f"Steering: {output.steering:+0.2f} -> {output.target_steering:+0.2f}",
@@ -260,21 +258,22 @@ class RadarPygameViz:
         y = plot.top + 38
         for row in rows:
             self._draw_text(row, (panel_x, y), (205, 214, 222))
-            y += 24
+            y += 22
 
-        y += 14
+        y += 10
         if output is not None:
-            self._draw_bar("LEFT", output.left_score, panel_x, y, (224, 181, 76))
-            self._draw_bar("FRONT", output.front_score, panel_x, y + 58, (232, 86, 86))
-            self._draw_bar("RIGHT", output.right_score, panel_x, y + 116, (224, 181, 76))
-            self._draw_bar("THROT", output.throttle, panel_x, y + 174, (79, 211, 141))
-            self._draw_signed_bar("STEER", output.steering, panel_x, y + 232, (80, 170, 220))
+            self._draw_bar("LEFT", output.left_score, panel_x, y, (224, 181, 76), width=330)
+            self._draw_bar("FRONT", output.front_score, panel_x, y + 44, (232, 86, 86), width=330)
+            self._draw_bar("RIGHT", output.right_score, panel_x, y + 88, (224, 181, 76), width=330)
+            self._draw_bar("THROT", output.throttle, panel_x, y + 142, (79, 211, 141), width=330)
+            self._draw_signed_bar("STEER", output.steering, panel_x, y + 186, (80, 170, 220), width=330)
 
         if output is not None:
-            self._draw_yoke((panel_x + 70, plot.bottom - 95), 42, output.steering)
-            self._draw_velocity_chart(pygame.Rect(panel_x + 135, plot.bottom - 145, 190, 92))
+            control_top = plot.bottom - 165
+            self._draw_yoke((panel_x + 78, control_top + 76), 54, output.steering)
+            self._draw_velocity_chart(pygame.Rect(panel_x + 160, control_top + 8, 230, 126))
 
-        y = plot.bottom - 42
+        y = plot.bottom - 28
         self._draw_text(f"alpha {cfg.alpha:.2f}   eps {cfg.cluster_eps_m:.2f}m", (panel_x, y), (152, 164, 175), self.small_font)
         self._draw_text(f"snr {cfg.min_snr_raw}   block {cfg.front_on_thresh:.2f}/{cfg.front_off_thresh:.2f}", (panel_x, y + 20), (152, 164, 175), self.small_font)
 
@@ -286,11 +285,11 @@ class RadarPygameViz:
             "stop": (205, 68, 68),
             "waiting": (78, 91, 106),
         }[command]
-        status = pygame.Rect(28, self.height - 76, self.width - 56, 48)
+        status = pygame.Rect(28, self.height - 42, self.width - 56, 26)
         pygame.draw.rect(self.screen, command_color, status, border_radius=5)
-        self._draw_text(command.upper(), (status.left + 18, status.top + 1), (255, 255, 255), self.big_font)
+        self._draw_text(command.upper(), (status.left + 14, status.top - 2), (255, 255, 255), self.big_font)
         if output is not None:
-            self._draw_text(output.reason[:85], (status.left + 300, status.top + 15), (255, 255, 255), self.font)
+            self._draw_text(output.reason[:92], (status.left + 190, status.top + 4), (255, 255, 255), self.small_font)
 
         pygame.display.flip()
         self.last_fps = self.clock.get_fps()
