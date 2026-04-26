@@ -18,7 +18,10 @@ def build_config(args) -> NavConfig:
         front_on_thresh=args.front_on_thresh,
         front_off_thresh=args.front_off_thresh,
         command_lock_s=args.command_lock_s,
-        emergency_stop_thresh=args.emergency_stop_thresh,
+        emergency_center_half_width=args.emergency_center_half_width,
+        emergency_near_y=args.emergency_near_y,
+        emergency_on_thresh=args.emergency_on_thresh,
+        emergency_off_thresh=args.emergency_off_thresh,
     )
 
 
@@ -33,7 +36,10 @@ def add_nav_args(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--front-on-thresh", type=float, default=0.70)
     ap.add_argument("--front-off-thresh", type=float, default=0.40)
     ap.add_argument("--command-lock-s", type=float, default=0.35)
-    ap.add_argument("--emergency-stop-thresh", type=float, default=0.90)
+    ap.add_argument("--emergency-center-half-width", type=float, default=0.18)
+    ap.add_argument("--emergency-near-y", type=float, default=0.55)
+    ap.add_argument("--emergency-on-thresh", type=float, default=0.70)
+    ap.add_argument("--emergency-off-thresh", type=float, default=0.45)
 
 
 def main() -> None:
@@ -82,7 +88,8 @@ def main() -> None:
                     print(
                         "[LIVE] "
                         f"alpha={cfg.alpha:.2f} eps={cfg.cluster_eps_m:.2f} "
-                        f"min_snr_raw={cfg.min_snr_raw} on/off={cfg.front_on_thresh:.2f}/{cfg.front_off_thresh:.2f}"
+                        f"min_snr_raw={cfg.min_snr_raw} block={cfg.front_on_thresh:.2f}/{cfg.front_off_thresh:.2f} "
+                        f"emerg={cfg.emergency_on_thresh:.2f}/{cfg.emergency_off_thresh:.2f}"
                     )
 
             if not viz.paused:

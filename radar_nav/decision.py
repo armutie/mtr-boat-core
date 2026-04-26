@@ -8,12 +8,14 @@ def update_scores(
     current_left: float,
     current_front: float,
     current_right: float,
+    current_emergency: float,
     cfg: NavConfig,
 ) -> None:
     alpha = cfg.alpha
     state.left_score = clamp((1.0 - alpha) * state.left_score + alpha * current_left)
     state.front_score = clamp((1.0 - alpha) * state.front_score + alpha * current_front)
     state.right_score = clamp((1.0 - alpha) * state.right_score + alpha * current_right)
+    state.emergency_score = clamp((1.0 - alpha) * state.emergency_score + alpha * current_emergency)
 
 
 def update_front_blocked(state: NavState, cfg: NavConfig) -> None:
@@ -23,9 +25,16 @@ def update_front_blocked(state: NavState, cfg: NavConfig) -> None:
         state.front_blocked = False
 
 
+def update_emergency_stop(state: NavState, cfg: NavConfig) -> None:
+    if state.emergency_score > cfg.emergency_on_thresh:
+        state.emergency_stop = True
+    elif state.emergency_score < cfg.emergency_off_thresh:
+        state.emergency_stop = False
+
+
 def choose_desired_command(state: NavState, cfg: NavConfig) -> tuple[Command, str]:
-    if state.front_score > cfg.emergency_stop_thresh:
-        return "stop", "front score above emergency stop threshold"
+    if state.emergency_stop:
+        return "stop", "close centered obstacle inside emergency zone"
 
     if state.front_blocked:
         if state.left_score < state.right_score - cfg.side_margin:
@@ -40,7 +49,7 @@ def choose_desired_command(state: NavState, cfg: NavConfig) -> tuple[Command, st
 
 
 def apply_command_lock(state: NavState, desired: Command, now: float, cfg: NavConfig) -> Command:
-    emergency = desired == "stop" and state.front_score > cfg.emergency_stop_thresh
+    emergency = desired == "stop" and state.emergency_stop
     locked = now - state.last_command_time < cfg.command_lock_s
 
     if desired == state.command:

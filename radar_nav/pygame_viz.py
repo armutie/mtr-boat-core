@@ -186,6 +186,7 @@ class RadarPygameViz:
                 f"Filtered: {len(output.filtered_points)}",
                 f"Clusters: {len(output.clusters)}",
                 f"Blocked: {str(output.front_blocked).upper()}",
+                f"Emergency: {str(output.emergency_stop).upper()}",
                 f"Desired: {output.desired_command.upper()}",
                 f"FPS: {self.last_fps:0.1f}",
             ]
@@ -201,11 +202,12 @@ class RadarPygameViz:
             self._draw_bar("LEFT", output.left_score, panel_x, y, (224, 181, 76))
             self._draw_bar("FRONT", output.front_score, panel_x, y + 58, (232, 86, 86))
             self._draw_bar("RIGHT", output.right_score, panel_x, y + 116, (224, 181, 76))
+            self._draw_bar("EMERG", output.emergency_score, panel_x, y + 174, (205, 68, 68))
 
-        y = plot.bottom - 90
+        y = plot.bottom - 74
         self._draw_text(f"alpha {cfg.alpha:.2f}   eps {cfg.cluster_eps_m:.2f}m", (panel_x, y), (152, 164, 175), self.small_font)
-        self._draw_text(f"snr {cfg.min_snr_raw}   on/off {cfg.front_on_thresh:.2f}/{cfg.front_off_thresh:.2f}", (panel_x, y + 20), (152, 164, 175), self.small_font)
-        self._draw_text(f"singletons {'on' if self.show_singletons else 'off'}   raw {'on' if self.show_raw else 'off'}", (panel_x, y + 40), (152, 164, 175), self.small_font)
+        self._draw_text(f"snr {cfg.min_snr_raw}   block {cfg.front_on_thresh:.2f}/{cfg.front_off_thresh:.2f}", (panel_x, y + 20), (152, 164, 175), self.small_font)
+        self._draw_text(f"emerg {cfg.emergency_on_thresh:.2f}/{cfg.emergency_off_thresh:.2f} y<{cfg.emergency_near_y:.2f}", (panel_x, y + 40), (152, 164, 175), self.small_font)
 
         command = output.command if output else "waiting"
         command_color = {

@@ -27,7 +27,10 @@ class NavConfig:
     side_margin: float = 0.15
 
     command_lock_s: float = 0.35
-    emergency_stop_thresh: float = 0.90
+    emergency_center_half_width: float = 0.18
+    emergency_near_y: float = 0.55
+    emergency_on_thresh: float = 0.70
+    emergency_off_thresh: float = 0.45
 
     viz_x_min: float = -1.5
     viz_x_max: float = 1.5
@@ -41,3 +44,7 @@ class NavConfig:
             self.min_snr_raw = max(self.min_snr_raw, 0)
         self.front_on_thresh = min(max(self.front_on_thresh, 0.05), 1.0)
         self.front_off_thresh = min(max(self.front_off_thresh, 0.0), self.front_on_thresh)
+        self.emergency_center_half_width = max(self.emergency_center_half_width, 0.05)
+        self.emergency_near_y = max(self.emergency_near_y, self.min_y)
+        self.emergency_on_thresh = min(max(self.emergency_on_thresh, 0.05), 1.0)
+        self.emergency_off_thresh = min(max(self.emergency_off_thresh, 0.0), self.emergency_on_thresh)

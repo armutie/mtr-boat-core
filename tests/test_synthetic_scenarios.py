@@ -39,7 +39,44 @@ class SyntheticNavigationTests(unittest.TestCase):
         self.assertIsNotNone(output)
         self.assertGreater(output.front_score, cfg.front_on_thresh)
         self.assertTrue(output.front_blocked)
+        self.assertFalse(output.emergency_stop)
         self.assertIn(output.command, ("stop", "turn_left", "turn_right"))
+
+    def test_close_centered_obstacle_triggers_emergency_stop(self):
+        cfg = NavConfig(command_lock_s=0.0)
+        pipeline = RadarNavPipeline(cfg)
+        close_points = [
+            point(-0.03, 0.30),
+            point(0.02, 0.34),
+            point(0.04, 0.38),
+        ]
+
+        output = None
+        for frame in range(30):
+            output = pipeline.process_points(close_points, frame_number=frame, now=frame * 0.1)
+
+        self.assertIsNotNone(output)
+        self.assertGreater(output.emergency_score, cfg.emergency_on_thresh)
+        self.assertTrue(output.emergency_stop)
+        self.assertEqual(output.command, "stop")
+
+    def test_far_front_obstacle_turns_without_emergency(self):
+        cfg = NavConfig(command_lock_s=0.0)
+        pipeline = RadarNavPipeline(cfg)
+        far_front_with_right_obstacle = front_cluster() + [
+            point(0.62, 0.70),
+            point(0.67, 0.75),
+            point(0.72, 0.78),
+        ]
+
+        output = None
+        for frame in range(30):
+            output = pipeline.process_points(far_front_with_right_obstacle, frame_number=frame, now=frame * 0.1)
+
+        self.assertIsNotNone(output)
+        self.assertTrue(output.front_blocked)
+        self.assertFalse(output.emergency_stop)
+        self.assertEqual(output.command, "turn_left")
 
     def test_random_one_frame_noise_does_not_block_front(self):
         cfg = NavConfig(command_lock_s=0.0)
