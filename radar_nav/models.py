@@ -25,9 +25,11 @@ class NavState:
     left_score: float = 0.0
     front_score: float = 0.0
     right_score: float = 0.0
-    emergency_score: float = 0.0
     front_blocked: bool = False
-    emergency_stop: bool = False
+    target_throttle: float = 1.0
+    target_steering: float = 0.0
+    throttle: float = 0.0
+    steering: float = 0.0
     command: Command = "stop"
     last_command_time: float = 0.0
 
@@ -35,9 +37,11 @@ class NavState:
         self.left_score = 0.0
         self.front_score = 0.0
         self.right_score = 0.0
-        self.emergency_score = 0.0
         self.front_blocked = False
-        self.emergency_stop = False
+        self.target_throttle = 1.0
+        self.target_steering = 0.0
+        self.throttle = 0.0
+        self.steering = 0.0
         self.command = "stop"
         self.last_command_time = 0.0
 
@@ -52,13 +56,14 @@ class NavOutput:
     current_left: float
     current_front: float
     current_right: float
-    current_emergency: float
     left_score: float
     front_score: float
     right_score: float
-    emergency_score: float
     front_blocked: bool
-    emergency_stop: bool
+    target_throttle: float
+    target_steering: float
+    throttle: float
+    steering: float
     command: Command
     desired_command: Command
     reason: str

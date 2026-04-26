@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from .config import NavConfig
 from .models import NavOutput
 
@@ -24,6 +26,8 @@ class RadarPygameViz:
         self.clock = None
         self.screen = None
         self.last_fps = 0.0
+        self.throttle_history: list[float] = []
+        self.max_history = 180
 
         pygame.init()
         self.screen = pygame.display.set_mode((width, height))
@@ -121,8 +125,69 @@ class RadarPygameViz:
         fill = pygame.Rect(bar.left, bar.top, int(bar.width * max(0.0, min(value, 1.0))), bar.height)
         pygame.draw.rect(self.screen, color, fill, border_radius=3)
 
+    def _draw_signed_bar(self, label: str, value: float, x: int, y: int, color) -> None:
+        pygame = self.pygame
+        value = max(-1.0, min(1.0, value))
+        self._draw_text(f"{label:<6} {value:+0.2f}", (x, y))
+        bar = pygame.Rect(x, y + 24, 250, 14)
+        center = bar.left + bar.width // 2
+        pygame.draw.rect(self.screen, (38, 44, 50), bar, border_radius=3)
+        pygame.draw.line(self.screen, (120, 132, 144), (center, bar.top - 2), (center, bar.bottom + 2), 1)
+        if value < 0:
+            fill = pygame.Rect(center + int(value * bar.width / 2), bar.top, int(abs(value) * bar.width / 2), bar.height)
+        else:
+            fill = pygame.Rect(center, bar.top, int(value * bar.width / 2), bar.height)
+        pygame.draw.rect(self.screen, color, fill, border_radius=3)
+
+    def _draw_yoke(self, center, radius: int, steering: float) -> None:
+        pygame = self.pygame
+        steering = max(-1.0, min(1.0, steering))
+        angle = steering * math.radians(80)
+        cx, cy = center
+        pygame.draw.circle(self.screen, (38, 44, 50), center, radius + 8, 2)
+        pygame.draw.circle(self.screen, (76, 88, 102), center, radius, 3)
+
+        def rotated_point(px: float, py: float):
+            dx = px - cx
+            dy = py - cy
+            ca = math.cos(angle)
+            sa = math.sin(angle)
+            return int(cx + dx * ca - dy * sa), int(cy + dx * sa + dy * ca)
+
+        left = rotated_point(cx - radius * 0.78, cy)
+        right = rotated_point(cx + radius * 0.78, cy)
+        top = rotated_point(cx, cy - radius * 0.58)
+        bottom = rotated_point(cx, cy + radius * 0.50)
+        pygame.draw.line(self.screen, (230, 236, 241), left, right, 5)
+        pygame.draw.line(self.screen, (230, 236, 241), top, bottom, 4)
+        pygame.draw.circle(self.screen, (80, 170, 220), center, 8)
+        self._draw_text("STEER", (cx - 32, cy + radius + 13), (152, 164, 175), self.small_font)
+
+    def _draw_velocity_chart(self, rect) -> None:
+        pygame = self.pygame
+        pygame.draw.rect(self.screen, (18, 24, 30), rect)
+        pygame.draw.rect(self.screen, (92, 105, 118), rect, 1)
+        self._draw_text("THROTTLE HISTORY", (rect.left + 8, rect.top + 6), (152, 164, 175), self.small_font)
+        for i in range(1, 4):
+            y = rect.top + int(rect.height * i / 4)
+            pygame.draw.line(self.screen, (34, 43, 52), (rect.left, y), (rect.right, y))
+        if len(self.throttle_history) < 2:
+            return
+        points = []
+        history = self.throttle_history[-self.max_history:]
+        for i, value in enumerate(history):
+            x = rect.left + int(i / max(len(history) - 1, 1) * (rect.width - 1))
+            y = rect.bottom - 8 - int(max(0.0, min(1.0, value)) * (rect.height - 28))
+            points.append((x, y))
+        pygame.draw.lines(self.screen, (79, 211, 141), False, points, 2)
+
     def draw(self, output: NavOutput | None) -> None:
         pygame = self.pygame
+        if output is not None:
+            self.throttle_history.append(output.throttle)
+            if len(self.throttle_history) > self.max_history:
+                del self.throttle_history[: len(self.throttle_history) - self.max_history]
+
         self.screen.fill((13, 17, 22))
         plot = self._plot_rect()
         pygame.draw.rect(self.screen, (18, 24, 30), plot)
@@ -186,8 +251,8 @@ class RadarPygameViz:
                 f"Filtered: {len(output.filtered_points)}",
                 f"Clusters: {len(output.clusters)}",
                 f"Blocked: {str(output.front_blocked).upper()}",
-                f"Emergency: {str(output.emergency_stop).upper()}",
-                f"Desired: {output.desired_command.upper()}",
+                f"Throttle: {output.throttle:0.2f} -> {output.target_throttle:0.2f}",
+                f"Steering: {output.steering:+0.2f} -> {output.target_steering:+0.2f}",
                 f"FPS: {self.last_fps:0.1f}",
             ]
         else:
@@ -202,12 +267,16 @@ class RadarPygameViz:
             self._draw_bar("LEFT", output.left_score, panel_x, y, (224, 181, 76))
             self._draw_bar("FRONT", output.front_score, panel_x, y + 58, (232, 86, 86))
             self._draw_bar("RIGHT", output.right_score, panel_x, y + 116, (224, 181, 76))
-            self._draw_bar("EMERG", output.emergency_score, panel_x, y + 174, (205, 68, 68))
+            self._draw_bar("THROT", output.throttle, panel_x, y + 174, (79, 211, 141))
+            self._draw_signed_bar("STEER", output.steering, panel_x, y + 232, (80, 170, 220))
 
-        y = plot.bottom - 74
+        if output is not None:
+            self._draw_yoke((panel_x + 70, plot.bottom - 95), 42, output.steering)
+            self._draw_velocity_chart(pygame.Rect(panel_x + 135, plot.bottom - 145, 190, 92))
+
+        y = plot.bottom - 42
         self._draw_text(f"alpha {cfg.alpha:.2f}   eps {cfg.cluster_eps_m:.2f}m", (panel_x, y), (152, 164, 175), self.small_font)
         self._draw_text(f"snr {cfg.min_snr_raw}   block {cfg.front_on_thresh:.2f}/{cfg.front_off_thresh:.2f}", (panel_x, y + 20), (152, 164, 175), self.small_font)
-        self._draw_text(f"emerg {cfg.emergency_on_thresh:.2f}/{cfg.emergency_off_thresh:.2f} y<{cfg.emergency_near_y:.2f}", (panel_x, y + 40), (152, 164, 175), self.small_font)
 
         command = output.command if output else "waiting"
         command_color = {

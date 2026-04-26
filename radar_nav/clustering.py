@@ -129,17 +129,3 @@ def clusters_to_evidence(clusters: list[RadarCluster], cfg: NavConfig) -> tuple[
         elif cluster.zone == "right":
             right += cluster.confidence
     return clamp(left), clamp(front), clamp(right)
-
-
-def clusters_to_emergency_evidence(clusters: list[RadarCluster], cfg: NavConfig) -> float:
-    strongest = 0.0
-    for cluster in clusters:
-        if abs(cluster.cx) > cfg.emergency_center_half_width:
-            continue
-        if cluster.cy > cfg.emergency_near_y:
-            continue
-
-        distance_ratio = (cluster.cy - cfg.min_y) / max(cfg.emergency_near_y - cfg.min_y, 0.01)
-        proximity = 1.0 - 0.4 * clamp(distance_ratio, 0.0, 1.0)
-        strongest = max(strongest, cluster.confidence * proximity)
-    return clamp(strongest)
