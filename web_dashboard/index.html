@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MTR Sensor Deck</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">MTR Sensor Deck</p>
+          <h1>Realtime boat perception</h1>
+        </div>
+        <div class="connection">
+          <span id="connection-dot" class="dot"></span>
+          <span id="connection-label">connecting</span>
+        </div>
+      </header>
+
+      <nav class="tabs" aria-label="Sensor views">
+        <button class="tab active" data-tab="overview">Overview</button>
+        <button class="tab" data-tab="mmwave">mmWave</button>
+        <button class="tab" data-tab="gnss">GNSS</button>
+        <button class="tab" data-tab="sonar">Sonar</button>
+        <button class="tab" data-tab="ultrasonic">Ultrasonic</button>
+      </nav>
+
+      <section id="overview" class="view active">
+        <div class="status-grid">
+          <article class="metric">
+            <span>mmWave</span>
+            <strong id="health-mmwave">--</strong>
+          </article>
+          <article class="metric">
+            <span>GNSS</span>
+            <strong id="health-gnss">--</strong>
+          </article>
+          <article class="metric">
+            <span>Sonar</span>
+            <strong id="health-sonar">--</strong>
+          </article>
+          <article class="metric">
+            <span>Ultrasonic</span>
+            <strong id="health-ultrasonic">--</strong>
+          </article>
+        </div>
+        <div class="overview-grid">
+          <section class="panel radar-panel">
+            <div class="panel-head">
+              <h2>Obstacle Field</h2>
+              <span id="command-pill" class="pill">--</span>
+            </div>
+            <canvas id="radar-overview" width="640" height="420"></canvas>
+          </section>
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Position</h2>
+              <span id="fix-pill" class="pill">--</span>
+            </div>
+            <div class="map-card">
+              <div id="boat-marker" class="boat-marker"></div>
+              <div class="map-grid"></div>
+            </div>
+            <div class="readout two">
+              <span>Lat <b id="lat">--</b></span>
+              <span>Lon <b id="lon">--</b></span>
+              <span>Speed <b id="speed">--</b></span>
+              <span>Heading <b id="heading">--</b></span>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="mmwave" class="view">
+        <section class="panel full">
+          <div class="panel-head">
+            <h2>mmWave Point Cloud</h2>
+            <span id="point-count" class="pill">0 points</span>
+          </div>
+          <canvas id="radar-detail" width="960" height="520"></canvas>
+          <div class="readout four">
+            <span>Frame <b id="mmwave-frame">--</b></span>
+            <span>Raw <b id="mmwave-raw">--</b></span>
+            <span>Filtered <b id="mmwave-filtered">--</b></span>
+            <span>Clusters <b id="mmwave-clusters">--</b></span>
+          </div>
+          <div class="zone-row">
+            <div><span>Left Score</span><meter id="zone-left" min="0" max="1"></meter></div>
+            <div><span>Front Score</span><meter id="zone-front" min="0" max="1"></meter></div>
+            <div><span>Right Score</span><meter id="zone-right" min="0" max="1"></meter></div>
+          </div>
+          <div class="readout four">
+            <span>Throttle <b id="mmwave-throttle">--</b></span>
+            <span>Target Throttle <b id="mmwave-target-throttle">--</b></span>
+            <span>Steering <b id="mmwave-steering">--</b></span>
+            <span>Target Steering <b id="mmwave-target-steering">--</b></span>
+          </div>
+          <p id="mmwave-reason" class="reason">No mmWave feed connected.</p>
+        </section>
+      </section>
+
+      <section id="gnss" class="view">
+        <section class="panel full">
+          <div class="panel-head">
+            <h2>GNSS Track</h2>
+            <span id="sat-pill" class="pill">-- sats</span>
+          </div>
+          <div class="track">
+            <canvas id="track-canvas" width="960" height="480"></canvas>
+          </div>
+          <div class="readout four">
+            <span>Fix <b id="gnss-fix">--</b></span>
+            <span>HDOP <b id="hdop">--</b></span>
+            <span>Speed <b id="gnss-speed">--</b></span>
+            <span>Heading <b id="gnss-heading">--</b></span>
+          </div>
+        </section>
+      </section>
+
+      <section id="sonar" class="view">
+        <section class="panel full">
+          <div class="panel-head">
+            <h2>Sonar Range</h2>
+            <span class="pill">meters</span>
+          </div>
+          <div id="sonar-bars" class="range-bars"></div>
+        </section>
+      </section>
+
+      <section id="ultrasonic" class="view">
+        <section class="panel full">
+          <div class="panel-head">
+            <h2>Ultrasonic Range</h2>
+            <span class="pill">centimeters</span>
+          </div>
+          <div id="ultrasonic-bars" class="range-bars compact"></div>
+        </section>
+      </section>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>

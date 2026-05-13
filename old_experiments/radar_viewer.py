@@ -6,11 +6,11 @@ import pygame
 
 from mmwave_uart import build_navigation_summary
 from mmwave_uart import merge_nav_config
-from robot_nav import build_robot_nav_state
-from robot_nav import CommandVoteSmoother
-from robot_nav import DEFAULT_ROBOT_NAV_CONFIG
-from robot_nav import merge_decision_config
-from robot_nav import RobotRadarNavigator
+from old_experiments.robot_nav import build_robot_nav_state
+from old_experiments.robot_nav import CommandVoteSmoother
+from old_experiments.robot_nav import DEFAULT_ROBOT_NAV_CONFIG
+from old_experiments.robot_nav import merge_decision_config
+from old_experiments.robot_nav import RobotRadarNavigator
 
 
 BACKGROUND = (11, 16, 24)
