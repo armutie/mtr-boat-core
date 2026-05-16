@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>radar_nav_ros</name>
+  <name>radar_ros</name>
   <version>0.1.0</version>
   <description>ROS2 bridge for TI mmWave radar parsing and radar_nav obstacle state.</description>
   <maintainer email="user@example.com">mtr_radar</maintainer>

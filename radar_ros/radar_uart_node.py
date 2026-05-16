@@ -3,7 +3,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import PointCloud2
 
 from mmwave_uart import MmwaveUartParser, send_cfg
-from radar_nav_ros.point_cloud import points_to_cloud
+from radar_ros.point_cloud import points_to_cloud
 
 
 class RadarUartNode(Node):

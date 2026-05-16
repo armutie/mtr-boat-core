@@ -10,7 +10,7 @@ from std_msgs.msg import String
 
 from radar_nav import NavConfig, RadarNavPipeline
 from radar_nav.logging import output_to_record
-from radar_nav_ros.point_cloud import cloud_to_points, points_to_cloud
+from radar_ros.point_cloud import cloud_to_points, points_to_cloud
 
 
 def nav_config_from_params(node: Node) -> NavConfig:
