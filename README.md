@@ -2,7 +2,7 @@
 
 Orange Pi robot software for the MTR boat experiments.
 
-This repo is meant to become the shared home for the boat's sensor drivers, navigation logic, ROS2 nodes, dashboard, and actuator bridges. Right now the working path is radar-driven obstacle navigation with an ESP32 thruster controller.
+This repo is meant to become the shared home for the boat's sensor drivers, navigation logic, ROS2 nodes, dashboard, and actuator bridges. Right now the working path is direct Python bench/field testing: radar UART in, ESP32 thruster serial out. ROS2 support exists for the radar path, but full robot control should move there after the hardware behavior is proven.
 
 ## Current Capabilities
 
@@ -10,19 +10,21 @@ This repo is meant to become the shared home for the boat's sensor drivers, navi
 - Filter and cluster radar points into obstacle evidence.
 - Produce simple navigation output: throttle, steering, command, and reason.
 - Send gentle ESC PWM commands to an ESP32 over serial for basic thruster tests.
-- Run the radar path either directly from Python scripts or through ROS2 nodes.
+- Run the current hardware test directly from Python scripts.
+- Build the radar reader/navigation path as ROS2 nodes for later robot integration.
 - Visualize radar/navigation state with pygame or the browser dashboard.
 
 ## Layout
 
 - `radar_nav/`: core non-ROS radar/navigation logic. Scripts and ROS nodes both use this.
 - `radar_ros/`: ROS2 wrapper nodes around the radar parser and `radar_nav` pipeline.
+- `thruster_control/`: ESP32 serial and ESC PWM mapping helpers.
 - `scripts/`: runnable robot/development commands.
 - `config/radar/`: radar profile files for startup.
 - `web_dashboard/`: browser dashboard for demo/ROS sensor state.
 - `mmwave_uart.py`: low-level TI mmWave UART parser shared by scripts and ROS nodes.
 
-`radar_nav/` is required for radar navigation in any mode. `radar_ros/` is only needed when running the same logic as ROS2 nodes/topics.
+`radar_nav/` is required for radar navigation in any mode. `radar_ros/` is only needed when running the same radar logic as ROS2 nodes/topics. For now, thruster control is direct serial from scripts; a ROS2 thruster node can be added later.
 
 ## Quick Pi Test
 

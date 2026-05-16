@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from radar_nav.esp32_bridge import Esp32ThrusterSerial
+from thruster_control import Esp32ThrusterSerial
 
 
 def main() -> None:

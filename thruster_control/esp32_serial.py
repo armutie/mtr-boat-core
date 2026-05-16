@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import serial
 
-from .models import NavOutput
+from radar_nav.models import NavOutput
 
 
 @dataclass
@@ -20,9 +20,7 @@ class ThrusterMapping:
     forward_min_us: int = 1520
     forward_max_us: int = 1600
     hard_min_us: int = 1350
-    hard_max_us: int = 1650
-    reverse_enabled: bool = False
-    reverse_min_us: int = 1400
+    hard_max_us: int = 2000
     steering_slowdown: float = 0.35
 
     def clamp_pwm(self, value: float) -> int:
