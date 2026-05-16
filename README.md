@@ -97,3 +97,31 @@ python3 web_dashboard/server.py --demo
 ```
 
 The topic names and navigation thresholds are ROS parameters, so a clusterer, controller, or web bridge can subscribe without importing the serial parser directly.
+
+## Basic radar to ESP32 thruster test
+
+The repo includes a minimal serial bridge for a first hardware test:
+
+- laptop reads the radar UART and runs `RadarNavPipeline`
+- laptop sends `PWM <microseconds>` or `STOP` lines to an ESP32 over USB serial
+- ESP32 firmware should already listen for those serial lines and drive the ESC
+
+Start with dry-run output before connecting/arming the thruster:
+
+```bash
+python run_nav_esp32.py --dry-run --esp32-port COM7 --data-port COM5
+```
+
+Then run the real serial bridge:
+
+```bash
+python run_nav_esp32.py --esp32-port COM7 --data-port COM5
+```
+
+If the TI radar also needs its `.cfg` file sent at startup:
+
+```bash
+python run_nav_esp32.py --esp32-port COM7 --cfg-port COM6 --cfg-file path/to/radar.cfg --data-port COM5
+```
+
+The current defaults use neutral `1500 us`, gentle forward output up to `1600 us`, and a hard clamp of `1350-2000 us`. Tune with `--forward-max-us`, `--forward-min-us`, and `--send-hz` only after the neutral/failsafe behavior is verified.
