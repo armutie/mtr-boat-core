@@ -1,79 +1,159 @@
-# mtr_radar
+# mtr-boat-core
 
-TI mmWave radar parsing, obstacle evidence, and robot navigation experiments.
+Orange Pi robot software for the MTR boat experiments.
 
-## ROS2 bridge
+This repo is meant to become the shared home for the boat's sensor drivers, navigation logic, ROS2 nodes, dashboard, and actuator bridges. Right now the working path is radar-driven obstacle navigation with an ESP32 thruster controller.
 
-This repo can be built as a ROS2 Python package named `radar_ros`. The ROS bridge is split into a sensor node and a navigation node:
+## Current Capabilities
 
-- `radar_uart_node`: reads the TI mmWave USB serial stream, parses frames, and publishes decoded point clouds.
-- `radar_nav_node`: subscribes to decoded point clouds, runs `RadarNavPipeline`, and publishes filtered points plus navigation state.
+- Read TI xWR18xx mmWave radar frames over UART.
+- Filter and cluster radar points into obstacle evidence.
+- Produce simple navigation output: throttle, steering, command, and reason.
+- Send gentle ESC PWM commands to an ESP32 over serial for basic thruster tests.
+- Run the radar path either directly from Python scripts or through ROS2 nodes.
+- Visualize radar/navigation state with pygame or the browser dashboard.
 
-Published topics:
+## Layout
 
-- `radar/raw_points` (`sensor_msgs/PointCloud2`): decoded radar points with `x`, `y`, `z`, `doppler`, `snr_raw`, and `noise_raw` fields.
-- `radar/filtered_points` (`sensor_msgs/PointCloud2`): points after the current navigation filter.
-- `radar/clusters_json` (`std_msgs/String`): JSON list of obstacle clusters.
-- `radar/nav_state_json` (`std_msgs/String`): JSON navigation state matching the JSONL logger schema.
+- `radar_nav/`: core non-ROS radar/navigation logic. Scripts and ROS nodes both use this.
+- `radar_ros/`: ROS2 wrapper nodes around the radar parser and `radar_nav` pipeline.
+- `scripts/`: runnable robot/development commands.
+- `config/radar/`: radar profile files for startup.
+- `web_dashboard/`: browser dashboard for demo/ROS sensor state.
+- `mmwave_uart.py`: low-level TI mmWave UART parser shared by scripts and ROS nodes.
 
-### Orange Pi setup
+`radar_nav/` is required for radar navigation in any mode. `radar_ros/` is only needed when running the same logic as ROS2 nodes/topics.
 
-From a ROS2 workspace on the robot:
+## Quick Pi Test
+
+Install Python serial support:
+
+```bash
+python3 -m pip install pyserial
+```
+
+Find serial ports:
+
+```bash
+ls /dev/ttyUSB* /dev/ttyACM*
+```
+
+Typical ports:
+
+- ESP32: `/dev/ttyACM0`
+- radar config UART: `/dev/ttyUSB0`
+- radar data UART: `/dev/ttyUSB1`
+
+First test the ESP32/thruster path without radar:
+
+```bash
+python3 scripts/run_thruster_ramp.py --esp32-port /dev/ttyACM0 --start-us 1505 --end-us 1550 --step-us 5 --hold-s 1
+```
+
+Then test radar-to-ESP32 in dry-run mode:
+
+```bash
+python3 scripts/run_nav_esp32.py --dry-run \
+  --esp32-port /dev/ttyACM0 \
+  --cfg-port /dev/ttyUSB0 \
+  --cfg-file config/radar/profile_2d.cfg \
+  --data-port /dev/ttyUSB1
+```
+
+Run the real bridge with a gentle cap:
+
+```bash
+python3 scripts/run_nav_esp32.py \
+  --esp32-port /dev/ttyACM0 \
+  --cfg-port /dev/ttyUSB0 \
+  --cfg-file config/radar/profile_2d.cfg \
+  --data-port /dev/ttyUSB1 \
+  --forward-max-us 1550
+```
+
+PWM defaults:
+
+- `1500 us`: neutral / stop
+- `1520 us`: minimum forward output
+- `1600 us`: default gentle forward cap
+- `1350-2000 us`: hard safety clamp accepted by the Python bridge
+
+Use physical power cutoff during thruster tests. `Ctrl+C` sends `STOP`, but hardware power control is the real safety path.
+
+## Live Visualization
+
+Show the pygame view while running the direct radar-to-ESP32 bridge:
+
+```bash
+python3 scripts/run_nav_esp32.py --viz \
+  --esp32-port /dev/ttyACM0 \
+  --cfg-port /dev/ttyUSB0 \
+  --cfg-file config/radar/profile_2d.cfg \
+  --data-port /dev/ttyUSB1 \
+  --forward-max-us 1550
+```
+
+For visualization only, use dry-run:
+
+```bash
+python3 scripts/run_nav_esp32.py --dry-run --viz \
+  --esp32-port /dev/ttyACM0 \
+  --cfg-port /dev/ttyUSB0 \
+  --cfg-file config/radar/profile_2d.cfg \
+  --data-port /dev/ttyUSB1
+```
+
+## ROS2 Mode
+
+From a ROS2 workspace:
 
 ```bash
 mkdir -p ~/ros2_ws/src
 cd ~/ros2_ws/src
-git clone <your-github-url> mtr_radar
+git clone https://github.com/armutie/mtr-boat-core.git
 cd ~/ros2_ws
 rosdep install --from-paths src --ignore-src -r -y
 colcon build --packages-select radar_ros
 source install/setup.bash
 ```
 
-Install Python serial support if your ROS image does not already provide it:
-
-```bash
-python3 -m pip install pyserial
-```
-
-Run the live UART publisher:
-
-```bash
-ros2 run radar_ros radar_uart_node --ros-args \
-  -p data_port:=/dev/ttyUSB1 \
-  -p baud:=921600 \
-  -p frame_id:=radar
-```
-
-If the Orange Pi should also send the TI `.cfg` file at startup:
+Run the radar UART publisher:
 
 ```bash
 ros2 run radar_ros radar_uart_node --ros-args \
   -p cfg_port:=/dev/ttyUSB0 \
-  -p cfg_file:=/home/orangepi/radar.cfg \
-  -p data_port:=/dev/ttyUSB1
+  -p cfg_file:=config/radar/profile_2d.cfg \
+  -p data_port:=/dev/ttyUSB1 \
+  -p frame_id:=radar
 ```
 
-In another terminal, run the navigation node:
+Run the navigation node:
 
 ```bash
-source ~/ros2_ws/install/setup.bash
 ros2 run radar_ros radar_nav_node
 ```
 
-Check topics:
+Published topics:
+
+- `radar/raw_points` (`sensor_msgs/PointCloud2`)
+- `radar/filtered_points` (`sensor_msgs/PointCloud2`)
+- `radar/clusters_json` (`std_msgs/String`)
+- `radar/nav_state_json` (`std_msgs/String`)
+
+Check output:
 
 ```bash
-ros2 topic list
 ros2 topic echo /radar/nav_state_json
 ros2 topic hz /radar/raw_points
 ```
 
-Run the existing pygame viewer as a ROS2 subscriber instead of reading the UART directly:
+View ROS nav output with pygame:
 
 ```bash
 python3 scripts/run_nav_live.py --ros --nav-state-topic /radar/nav_state_json
 ```
+
+## Dashboard
 
 Run the browser dashboard from the robot or development laptop:
 
@@ -81,61 +161,27 @@ Run the browser dashboard from the robot or development laptop:
 python3 web_dashboard/server.py --ros --mmwave-topic radar/nav_state_json
 ```
 
-Then open:
+Open:
 
 ```text
 http://localhost:8080
 http://<orange-pi-or-laptop-ip>:8080
 ```
 
-The dashboard defaults to unavailable sensor states unless `--ros` or `--demo` is provided. `--ros` subscribes to the mmWave navigation JSON topic and keeps GNSS, sonar, and ultrasonic marked unavailable until those feeds are added.
-
-For UI-only testing without connected sensors:
+For UI-only testing without sensors:
 
 ```bash
 python3 web_dashboard/server.py --demo
 ```
 
-The topic names and navigation thresholds are ROS parameters, so a clusterer, controller, or web bridge can subscribe without importing the serial parser directly.
+The dashboard intentionally marks missing GNSS, sonar, and ultrasonic feeds unavailable until those feeds exist.
 
-## Repo layout
+## Simulation
 
-- `radar_nav/`: shared radar filtering, clustering, navigation, simulation, and visualization logic.
-- `radar_ros/`: ROS2 nodes for radar UART publishing and nav-state publishing.
-- `scripts/`: runnable development and robot scripts.
-- `config/radar/`: radar profile files for robot startup.
-- `web_dashboard/`: browser dashboard for ROS/demo sensor state.
-
-## Basic radar to ESP32 thruster test
-
-The repo includes a minimal serial bridge for a first hardware test:
-
-- laptop reads the radar UART and runs `RadarNavPipeline`
-- laptop sends `PWM <microseconds>` or `STOP` lines to an ESP32 over USB serial
-- ESP32 firmware should already listen for those serial lines and drive the ESC
-
-Start with dry-run output before connecting/arming the thruster:
+Run the boat/radar navigation simulation:
 
 ```bash
-python3 scripts/run_nav_esp32.py --dry-run --esp32-port /dev/ttyACM0 --data-port /dev/ttyUSB1
+python3 scripts/run_nav_sim.py
 ```
 
-Then run the real serial bridge:
-
-```bash
-python3 scripts/run_nav_esp32.py --esp32-port /dev/ttyACM0 --data-port /dev/ttyUSB1
-```
-
-If the TI radar also needs its `.cfg` file sent at startup:
-
-```bash
-python3 scripts/run_nav_esp32.py --esp32-port /dev/ttyACM0 --cfg-port /dev/ttyUSB0 --cfg-file config/radar/profile_2d.cfg --data-port /dev/ttyUSB1
-```
-
-The current defaults use neutral `1500 us`, gentle forward output up to `1600 us`, and a hard clamp of `1350-2000 us`. Tune with `--forward-max-us`, `--forward-min-us`, and `--send-hz` only after the neutral/failsafe behavior is verified.
-
-Run the manual ESP32/thruster ramp without radar:
-
-```bash
-python3 scripts/run_thruster_ramp.py --esp32-port /dev/ttyACM0 --start-us 1505 --end-us 1550 --step-us 5 --hold-s 1
-```
+The sim is for controller development and visualization. It is not required for the basic Pi thruster test.
