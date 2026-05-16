@@ -153,6 +153,35 @@ View ROS nav output with pygame:
 python3 scripts/run_nav_live.py --ros --nav-state-topic /radar/nav_state_json
 ```
 
+## ROS2 Roadmap
+
+The current hardware test path is direct Python:
+
+```text
+radar UART -> radar_nav -> thruster_control -> ESP32 serial
+```
+
+The intended robot runtime is ROS2 once the radar/ESP32 behavior is proven. The current ROS implementation covers the radar side:
+
+```text
+radar_ros/radar_uart_node.py
+  -> publishes radar/raw_points
+
+radar_ros/radar_nav_node.py
+  -> subscribes radar/raw_points
+  -> publishes radar/filtered_points
+  -> publishes radar/clusters_json
+  -> publishes radar/nav_state_json
+```
+
+Missing before ROS2 becomes the main autonomous runtime:
+
+- Add a thruster ROS node that subscribes to nav output and sends ESP32 serial commands.
+- Decide whether the thruster node consumes `radar/nav_state_json` directly or a cleaner future command topic.
+- Add launch/config files so the robot starts with one command instead of several terminals.
+- Move Pi-specific settings from `config/boat.local.json` into ROS launch/YAML when ROS becomes the main runtime.
+- Validate `colcon build` and `ros2 run` on the Orange Pi or another sourced ROS2 environment.
+
 ## Dashboard
 
 Run the browser dashboard from the robot or development laptop:
