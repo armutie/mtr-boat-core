@@ -26,6 +26,30 @@ This repo is meant to become the shared home for the boat's sensor drivers, navi
 
 `radar_nav/` is required for radar navigation in any mode. `radar_ros/` is only needed when running the same radar logic as ROS2 nodes/topics. For now, thruster control is direct serial from scripts; a ROS2 thruster node can be added later.
 
+## ESP32 Firmware
+
+Flash the ESP32 before running thruster tests:
+
+```text
+esp32_thruster/esp32_thruster.ino
+```
+
+Arduino IDE setup:
+
+- Board: `ESP32 Dev Module`
+- Library: `ESP32Servo`
+- ESC signal pin: GPIO `33`
+- Serial baud: `115200`
+
+The firmware listens for USB serial lines:
+
+```text
+PWM 1550
+STOP
+```
+
+It returns to neutral if no command arrives for one second.
+
 ## Quick Pi Test
 
 Install Python serial support:
