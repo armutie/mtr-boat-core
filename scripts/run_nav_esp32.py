@@ -11,6 +11,7 @@ if str(ROOT) not in sys.path:
 
 from mmwave_uart import MmwaveUartParser, send_cfg
 from radar_nav import RadarNavPipeline
+from radar_nav.logging import JsonlNavLogger
 from radar_nav.pygame_viz import RadarPygameViz
 from scripts.run_nav_live import add_nav_args, build_config
 from thruster_control import Esp32ThrusterSerial, ThrusterMapping, nav_output_to_thruster
@@ -65,6 +66,7 @@ def run_direct_bridge(args) -> None:
     pipeline = RadarNavPipeline(cfg)
     writer = None if args.dry_run else Esp32ThrusterSerial(args.esp32_port, args.esp32_baud)
     viz = RadarPygameViz(cfg, width=args.width, height=args.height) if args.viz else None
+    logger = JsonlNavLogger(args.log_path) if args.log else None
     mapping = build_mapping(args)
     min_period_s = 1.0 / max(args.send_hz, 0.1)
     last_send = 0.0
@@ -93,6 +95,8 @@ def run_direct_bridge(args) -> None:
             if decoded is not None:
                 last_output = pipeline.process_frame(decoded)
                 last_output_time = now
+                if logger is not None:
+                    logger.write(last_output)
 
             if now - last_send < min_period_s:
                 continue
@@ -109,6 +113,8 @@ def run_direct_bridge(args) -> None:
             writer.stop()
             writer.close()
         parser.close()
+        if logger is not None:
+            logger.close()
         if viz is not None:
             viz.close()
 
@@ -119,6 +125,8 @@ def main() -> None:
     ap.add_argument("--cfg-file", help="Path to TI .cfg file")
     ap.add_argument("--data-port", required=True, help="COM port for DATA UART, e.g. COM5 or /dev/ttyUSB1")
     ap.add_argument("--baud", type=int, default=921600)
+    ap.add_argument("--log", action="store_true", help="Write radar/nav JSONL log while controlling ESP32")
+    ap.add_argument("--log-path", help="Optional JSONL output path")
     add_nav_args(ap)
     add_thruster_args(ap)
     args = ap.parse_args()

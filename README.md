@@ -70,7 +70,8 @@ python3 scripts/run_nav_esp32.py \
   --cfg-port /dev/ttyUSB0 \
   --cfg-file config/radar/profile_2d.cfg \
   --data-port /dev/ttyUSB1 \
-  --forward-max-us 1550
+  --forward-max-us 1550 \
+  --log
 ```
 
 PWM defaults:
@@ -92,7 +93,8 @@ python3 scripts/run_nav_esp32.py --viz \
   --cfg-port /dev/ttyUSB0 \
   --cfg-file config/radar/profile_2d.cfg \
   --data-port /dev/ttyUSB1 \
-  --forward-max-us 1550
+  --forward-max-us 1550 \
+  --log
 ```
 
 For visualization only, use dry-run:
@@ -104,6 +106,8 @@ python3 scripts/run_nav_esp32.py --dry-run --viz \
   --cfg-file config/radar/profile_2d.cfg \
   --data-port /dev/ttyUSB1
 ```
+
+Control logs are written as JSONL under `logs/` by default and can be replayed with `scripts/run_nav_replay.py`.
 
 ## ROS2 Mode
 
