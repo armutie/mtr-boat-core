@@ -9,21 +9,43 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from boat_core.config import choose, load_boat_config, section
 from thruster_control import Esp32ThrusterSerial
+
+
+def apply_config(args) -> None:
+    config = load_boat_config(args.config)
+    esp32 = section(config, "esp32")
+    thruster = section(config, "thruster")
+    ramp = section(config, "ramp")
+
+    args.esp32_port = choose(args.esp32_port, esp32, "port")
+    args.esp32_baud = choose(args.esp32_baud, esp32, "baud", 115200)
+    args.neutral_us = choose(args.neutral_us, thruster, "neutral_us", 1500)
+    args.start_us = choose(args.start_us, ramp, "start_us", 1510)
+    args.end_us = choose(args.end_us, ramp, "end_us", 1600)
+    args.step_us = choose(args.step_us, ramp, "step_us", 5)
+    args.hold_s = choose(args.hold_s, ramp, "hold_s", 2.0)
+    args.neutral_hold_s = choose(args.neutral_hold_s, ramp, "neutral_hold_s", 5.0)
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Slow ESP32 thruster PWM ramp tester")
-    ap.add_argument("--esp32-port", required=True, help="ESP32 serial port, e.g. COM3")
-    ap.add_argument("--esp32-baud", type=int, default=115200)
-    ap.add_argument("--neutral-us", type=int, default=1500)
-    ap.add_argument("--start-us", type=int, default=1510)
-    ap.add_argument("--end-us", type=int, default=1600)
-    ap.add_argument("--step-us", type=int, default=5)
-    ap.add_argument("--hold-s", type=float, default=2.0)
-    ap.add_argument("--neutral-hold-s", type=float, default=5.0)
+    ap.add_argument("--config", default="config/boat.local.json", help="Boat config JSON path")
+    ap.add_argument("--esp32-port", help="ESP32 serial port, e.g. /dev/ttyACM0 or COM3")
+    ap.add_argument("--esp32-baud", type=int)
+    ap.add_argument("--neutral-us", type=int)
+    ap.add_argument("--start-us", type=int)
+    ap.add_argument("--end-us", type=int)
+    ap.add_argument("--step-us", type=int)
+    ap.add_argument("--hold-s", type=float)
+    ap.add_argument("--neutral-hold-s", type=float)
     ap.add_argument("--down", action="store_true", help="Ramp downward from neutral instead of upward")
     args = ap.parse_args()
+    apply_config(args)
+
+    if not args.esp32_port:
+        ap.error("--esp32-port is required unless set in --config")
 
     if args.step_us <= 0:
         ap.error("--step-us must be positive")

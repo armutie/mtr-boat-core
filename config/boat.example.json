@@ -1,0 +1,31 @@
+{
+  "radar": {
+    "cfg_port": "/dev/ttyUSB0",
+    "cfg_file": "config/radar/profile_2d.cfg",
+    "data_port": "/dev/ttyUSB1",
+    "baud": 921600
+  },
+  "esp32": {
+    "port": "/dev/ttyACM0",
+    "baud": 115200
+  },
+  "thruster": {
+    "neutral_us": 1500,
+    "forward_min_us": 1520,
+    "forward_max_us": 1550,
+    "hard_min_us": 1350,
+    "hard_max_us": 2000,
+    "steering_slowdown": 0.35
+  },
+  "ramp": {
+    "start_us": 1505,
+    "end_us": 1550,
+    "step_us": 5,
+    "hold_s": 1.0,
+    "neutral_hold_s": 5.0
+  },
+  "runtime": {
+    "send_hz": 5.0,
+    "stale_timeout_s": 1.0
+  }
+}

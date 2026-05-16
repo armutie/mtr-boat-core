@@ -46,32 +46,30 @@ Typical ports:
 - radar config UART: `/dev/ttyUSB0`
 - radar data UART: `/dev/ttyUSB1`
 
+Create a local robot config:
+
+```bash
+cp config/boat.example.json config/boat.local.json
+```
+
+Edit `config/boat.local.json` if the ports differ. The local file is ignored by Git, so each machine can keep its own serial port settings.
+
 First test the ESP32/thruster path without radar:
 
 ```bash
-python3 scripts/run_thruster_ramp.py --esp32-port /dev/ttyACM0 --start-us 1505 --end-us 1550 --step-us 5 --hold-s 1
+python3 scripts/run_thruster_ramp.py
 ```
 
 Then test radar-to-ESP32 in dry-run mode:
 
 ```bash
-python3 scripts/run_nav_esp32.py --dry-run \
-  --esp32-port /dev/ttyACM0 \
-  --cfg-port /dev/ttyUSB0 \
-  --cfg-file config/radar/profile_2d.cfg \
-  --data-port /dev/ttyUSB1
+python3 scripts/run_nav_esp32.py --dry-run
 ```
 
 Run the real bridge with a gentle cap:
 
 ```bash
-python3 scripts/run_nav_esp32.py \
-  --esp32-port /dev/ttyACM0 \
-  --cfg-port /dev/ttyUSB0 \
-  --cfg-file config/radar/profile_2d.cfg \
-  --data-port /dev/ttyUSB1 \
-  --forward-max-us 1550 \
-  --log
+python3 scripts/run_nav_esp32.py --log
 ```
 
 PWM defaults:
@@ -88,26 +86,22 @@ Use physical power cutoff during thruster tests. `Ctrl+C` sends `STOP`, but hard
 Show the pygame view while running the direct radar-to-ESP32 bridge:
 
 ```bash
-python3 scripts/run_nav_esp32.py --viz \
-  --esp32-port /dev/ttyACM0 \
-  --cfg-port /dev/ttyUSB0 \
-  --cfg-file config/radar/profile_2d.cfg \
-  --data-port /dev/ttyUSB1 \
-  --forward-max-us 1550 \
-  --log
+python3 scripts/run_nav_esp32.py --viz --log
 ```
 
 For visualization only, use dry-run:
 
 ```bash
-python3 scripts/run_nav_esp32.py --dry-run --viz \
-  --esp32-port /dev/ttyACM0 \
-  --cfg-port /dev/ttyUSB0 \
-  --cfg-file config/radar/profile_2d.cfg \
-  --data-port /dev/ttyUSB1
+python3 scripts/run_nav_esp32.py --dry-run --viz
 ```
 
 Control logs are written as JSONL under `logs/` by default and can be replayed with `scripts/run_nav_replay.py`.
+
+Any value from `config/boat.local.json` can still be overridden from the command line, for example:
+
+```bash
+python3 scripts/run_nav_esp32.py --forward-max-us 1525 --log
+```
 
 ## ROS2 Mode
 

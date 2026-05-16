@@ -6,7 +6,18 @@ package_name = "radar_ros"
 setup(
     name=package_name,
     version="0.1.0",
-    packages=find_packages(include=["radar_nav", "radar_nav.*", "radar_ros", "radar_ros.*", "thruster_control", "thruster_control.*"]),
+    packages=find_packages(
+        include=[
+            "boat_core",
+            "boat_core.*",
+            "radar_nav",
+            "radar_nav.*",
+            "radar_ros",
+            "radar_ros.*",
+            "thruster_control",
+            "thruster_control.*",
+        ]
+    ),
     py_modules=["mmwave_uart"],
     data_files=[
         ("share/ament_index/resource_index/packages", [f"resource/{package_name}"]),

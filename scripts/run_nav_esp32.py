@@ -10,6 +10,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from mmwave_uart import MmwaveUartParser, send_cfg
+from boat_core.config import choose, load_boat_config, section
 from radar_nav import RadarNavPipeline
 from radar_nav.logging import JsonlNavLogger
 from radar_nav.pygame_viz import RadarPygameViz
@@ -18,20 +19,46 @@ from thruster_control import Esp32ThrusterSerial, ThrusterMapping, nav_output_to
 
 
 def add_thruster_args(ap: argparse.ArgumentParser) -> None:
-    ap.add_argument("--esp32-port", required=True, help="ESP32 serial port, e.g. /dev/ttyACM0 or COM3")
-    ap.add_argument("--esp32-baud", type=int, default=115200)
+    ap.add_argument("--esp32-port", help="ESP32 serial port, e.g. /dev/ttyACM0 or COM3")
+    ap.add_argument("--esp32-baud", type=int)
     ap.add_argument("--dry-run", action="store_true", help="Print commands without writing to ESP32")
-    ap.add_argument("--send-hz", type=float, default=5.0, help="Max command send rate")
-    ap.add_argument("--stale-timeout-s", type=float, default=1.0, help="Neutral if no fresh nav output arrives")
+    ap.add_argument("--send-hz", type=float, help="Max command send rate")
+    ap.add_argument("--stale-timeout-s", type=float, help="Neutral if no fresh nav output arrives")
     ap.add_argument("--viz", action="store_true", help="Show the pygame radar navigation visualization")
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
-    ap.add_argument("--neutral-us", type=int, default=1500)
-    ap.add_argument("--forward-min-us", type=int, default=1520)
-    ap.add_argument("--forward-max-us", type=int, default=1600, help="Gentle default forward output")
-    ap.add_argument("--hard-min-us", type=int, default=1350)
-    ap.add_argument("--hard-max-us", type=int, default=2000)
-    ap.add_argument("--steering-slowdown", type=float, default=0.35)
+    ap.add_argument("--neutral-us", type=int)
+    ap.add_argument("--forward-min-us", type=int)
+    ap.add_argument("--forward-max-us", type=int, help="Gentle default forward output")
+    ap.add_argument("--hard-min-us", type=int)
+    ap.add_argument("--hard-max-us", type=int)
+    ap.add_argument("--steering-slowdown", type=float)
+
+
+def apply_config(args) -> None:
+    config = load_boat_config(args.config)
+    radar = section(config, "radar")
+    esp32 = section(config, "esp32")
+    thruster = section(config, "thruster")
+    runtime = section(config, "runtime")
+
+    args.cfg_port = choose(args.cfg_port, radar, "cfg_port")
+    args.cfg_file = choose(args.cfg_file, radar, "cfg_file")
+    args.data_port = choose(args.data_port, radar, "data_port")
+    args.baud = choose(args.baud, radar, "baud", 921600)
+
+    args.esp32_port = choose(args.esp32_port, esp32, "port")
+    args.esp32_baud = choose(args.esp32_baud, esp32, "baud", 115200)
+
+    args.neutral_us = choose(args.neutral_us, thruster, "neutral_us", 1500)
+    args.forward_min_us = choose(args.forward_min_us, thruster, "forward_min_us", 1520)
+    args.forward_max_us = choose(args.forward_max_us, thruster, "forward_max_us", 1600)
+    args.hard_min_us = choose(args.hard_min_us, thruster, "hard_min_us", 1350)
+    args.hard_max_us = choose(args.hard_max_us, thruster, "hard_max_us", 2000)
+    args.steering_slowdown = choose(args.steering_slowdown, thruster, "steering_slowdown", 0.35)
+
+    args.send_hz = choose(args.send_hz, runtime, "send_hz", 5.0)
+    args.stale_timeout_s = choose(args.stale_timeout_s, runtime, "stale_timeout_s", 1.0)
 
 
 def build_mapping(args) -> ThrusterMapping:
@@ -121,15 +148,21 @@ def run_direct_bridge(args) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Direct radar UART to ESP32 thruster bridge for bench/field tests")
+    ap.add_argument("--config", default="config/boat.local.json", help="Boat config JSON path")
     ap.add_argument("--cfg-port", help="COM port for CFG / CLI UART, e.g. COM6 or /dev/ttyUSB0")
     ap.add_argument("--cfg-file", help="Path to TI .cfg file")
-    ap.add_argument("--data-port", required=True, help="COM port for DATA UART, e.g. COM5 or /dev/ttyUSB1")
-    ap.add_argument("--baud", type=int, default=921600)
+    ap.add_argument("--data-port", help="COM port for DATA UART, e.g. COM5 or /dev/ttyUSB1")
+    ap.add_argument("--baud", type=int)
     ap.add_argument("--log", action="store_true", help="Write radar/nav JSONL log while controlling ESP32")
     ap.add_argument("--log-path", help="Optional JSONL output path")
     add_nav_args(ap)
     add_thruster_args(ap)
     args = ap.parse_args()
+    apply_config(args)
+    if not args.data_port:
+        ap.error("--data-port is required unless set in --config")
+    if not args.esp32_port:
+        ap.error("--esp32-port is required unless set in --config")
     run_direct_bridge(args)
 
 
