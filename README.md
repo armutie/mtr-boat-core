@@ -76,7 +76,7 @@ PWM defaults:
 
 - `1500 us`: neutral / stop
 - `1520 us`: minimum forward output
-- `1600 us`: default gentle forward cap
+- `1550 us`: default gentle forward cap in `config/boat.example.json`
 - `1350-2000 us`: hard safety clamp accepted by the Python bridge
 
 Use physical power cutoff during thruster tests. `Ctrl+C` sends `STOP`, but hardware power control is the real safety path.
