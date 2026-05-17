@@ -13,6 +13,10 @@
     "port": "/dev/ttyACM2",
     "baud": 9600
   },
+  "imu": {
+    "bus": 2,
+    "address": "0x68"
+  },
   "thruster": {
     "neutral_us": 1500,
     "forward_min_us": 1520,

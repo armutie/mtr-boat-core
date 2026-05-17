@@ -8,6 +8,7 @@ This repo is meant to become the shared home for the boat's sensor drivers, navi
 
 - Read TI xWR18xx mmWave radar frames over UART.
 - Read basic GNSS receivers that output NMEA over serial.
+- Read MPU-6050 IMU accel/gyro data over I2C.
 - Filter and cluster radar points into obstacle evidence.
 - Produce simple navigation output: throttle, steering, command, and reason.
 - Send gentle ESC PWM commands to an ESP32 over serial for basic thruster tests.
@@ -19,6 +20,7 @@ This repo is meant to become the shared home for the boat's sensor drivers, navi
 
 - `radar_nav/`: core non-ROS radar/navigation logic. Scripts and ROS nodes both use this.
 - `gnss/`: `pynmea2`-based NMEA parsing for USB/serial GNSS receivers.
+- `imu/`: MPU-6050 I2C reader for accel/gyro samples.
 - `radar_ros/`: ROS2 wrapper nodes around the radar parser and `radar_nav` pipeline.
 - `thruster_control/`: ESP32 serial and ESC PWM mapping helpers.
 - `scripts/`: runnable robot/development commands.
@@ -54,10 +56,10 @@ It returns to neutral if no command arrives for one second.
 
 ## Quick Pi Test
 
-Install Python serial support:
+Install Python sensor support:
 
 ```bash
-python3 -m pip install pyserial pynmea2
+python3 -m pip install pyserial pynmea2 smbus2
 ```
 
 Find serial ports:
@@ -99,6 +101,20 @@ python3 scripts/run_gnss_live.py --log
 ```
 
 The GNSS script uses `pynmea2` to read NMEA sentences such as GGA/RMC from the serial port in `config/boat.local.json`, prints fix/lat/lon/speed/heading, and writes JSONL logs under `logs/` when `--log` is used.
+
+If an MPU-6050 is connected over I2C, test it separately:
+
+```bash
+python3 scripts/run_imu_live.py
+```
+
+Use the visual trace view when a display is available:
+
+```bash
+python3 scripts/run_imu_live.py --viz
+```
+
+The IMU script reads accel/gyro samples, zero-calibrates gyro drift at startup while the board is still, prints live values, and writes JSONL logs under `logs/` when `--log` is used.
 
 Run the real bridge with a gentle cap:
 
