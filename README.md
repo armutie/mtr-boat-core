@@ -7,6 +7,7 @@ This repo is meant to become the shared home for the boat's sensor drivers, navi
 ## Current Capabilities
 
 - Read TI xWR18xx mmWave radar frames over UART.
+- Read basic GNSS receivers that output NMEA over serial.
 - Filter and cluster radar points into obstacle evidence.
 - Produce simple navigation output: throttle, steering, command, and reason.
 - Send gentle ESC PWM commands to an ESP32 over serial for basic thruster tests.
@@ -17,6 +18,7 @@ This repo is meant to become the shared home for the boat's sensor drivers, navi
 ## Layout
 
 - `radar_nav/`: core non-ROS radar/navigation logic. Scripts and ROS nodes both use this.
+- `gnss/`: `pynmea2`-based NMEA parsing for USB/serial GNSS receivers.
 - `radar_ros/`: ROS2 wrapper nodes around the radar parser and `radar_nav` pipeline.
 - `thruster_control/`: ESP32 serial and ESC PWM mapping helpers.
 - `scripts/`: runnable robot/development commands.
@@ -55,7 +57,7 @@ It returns to neutral if no command arrives for one second.
 Install Python serial support:
 
 ```bash
-python3 -m pip install pyserial
+python3 -m pip install pyserial pynmea2
 ```
 
 Find serial ports:
@@ -89,6 +91,14 @@ Then test radar-to-ESP32 in dry-run mode:
 ```bash
 python3 scripts/run_nav_esp32.py --dry-run
 ```
+
+If a GNSS receiver is connected, test it separately:
+
+```bash
+python3 scripts/run_gnss_live.py --log
+```
+
+The GNSS script uses `pynmea2` to read NMEA sentences such as GGA/RMC from the serial port in `config/boat.local.json`, prints fix/lat/lon/speed/heading, and writes JSONL logs under `logs/` when `--log` is used.
 
 Run the real bridge with a gentle cap:
 

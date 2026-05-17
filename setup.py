@@ -10,6 +10,8 @@ setup(
         include=[
             "boat_core",
             "boat_core.*",
+            "gnss",
+            "gnss.*",
             "radar_nav",
             "radar_nav.*",
             "radar_ros",
@@ -23,7 +25,7 @@ setup(
         ("share/ament_index/resource_index/packages", [f"resource/{package_name}"]),
         (f"share/{package_name}", ["package.xml"]),
     ],
-    install_requires=["pyserial", "setuptools"],
+    install_requires=["pynmea2", "pyserial", "setuptools"],
     zip_safe=True,
     maintainer="mtr_radar",
     maintainer_email="user@example.com",
