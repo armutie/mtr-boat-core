@@ -15,6 +15,9 @@ from imu.viz import ImuViz
 
 
 def print_summary(path: str, summary) -> None:
+    x = summary.integrated_x_deg
+    y = summary.integrated_y_deg
+    z = summary.integrated_z_deg
     print(f"[IMU replay] {path}")
     print(f"[IMU replay] samples={summary.sample_count} duration={summary.duration_s:.2f}s avg_rate={summary.average_hz:.1f} Hz")
     print(f"[IMU replay] accel_mag={summary.accel_mag_min_g:.3f}..{summary.accel_mag_max_g:.3f} g")
@@ -22,7 +25,9 @@ def print_summary(path: str, summary) -> None:
         "[IMU replay] gyro_avg_dps="
         f"({summary.gyro_x_avg_dps:+.3f},{summary.gyro_y_avg_dps:+.3f},{summary.gyro_z_avg_dps:+.3f})"
     )
-    print(f"[IMU replay] integrated_z_yaw={summary.yaw_z_delta_deg:+.2f} deg")
+    print(f"[IMU replay] integrated_x final={x.final_deg:+.2f} min={x.min_deg:+.2f} max={x.max_deg:+.2f} range={x.range_deg:.2f} deg")
+    print(f"[IMU replay] integrated_y final={y.final_deg:+.2f} min={y.min_deg:+.2f} max={y.max_deg:+.2f} range={y.range_deg:.2f} deg")
+    print(f"[IMU replay] integrated_z_yaw final={z.final_deg:+.2f} min={z.min_deg:+.2f} max={z.max_deg:+.2f} range={z.range_deg:.2f} deg")
 
 
 def replay_viz(samples, speed: float) -> None:

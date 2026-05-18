@@ -8,6 +8,14 @@ from .mpu6050 import ImuSample
 
 
 @dataclass
+class IntegratedAxis:
+    final_deg: float
+    min_deg: float
+    max_deg: float
+    range_deg: float
+
+
+@dataclass
 class ImuReplaySummary:
     sample_count: int
     duration_s: float
@@ -17,7 +25,9 @@ class ImuReplaySummary:
     gyro_x_avg_dps: float
     gyro_y_avg_dps: float
     gyro_z_avg_dps: float
-    yaw_z_delta_deg: float
+    integrated_x_deg: IntegratedAxis
+    integrated_y_deg: IntegratedAxis
+    integrated_z_deg: IntegratedAxis
 
 
 def load_imu_log(path: str | Path) -> list[ImuSample]:
@@ -33,21 +43,31 @@ def load_imu_log(path: str | Path) -> list[ImuSample]:
     return samples
 
 
-def integrate_yaw_z(samples: list[ImuSample]) -> float:
-    yaw = 0.0
+def integrate_axis(samples: list[ImuSample], axis: str) -> IntegratedAxis:
+    angle = 0.0
+    min_angle = 0.0
+    max_angle = 0.0
     previous: ImuSample | None = None
     for sample in samples:
         if previous is not None:
             dt = sample.timestamp - previous.timestamp
             if 0.0 < dt < 1.0:
-                yaw += sample.gyro_z_dps * dt
+                angle += getattr(sample, f"gyro_{axis}_dps") * dt
+                min_angle = min(min_angle, angle)
+                max_angle = max(max_angle, angle)
         previous = sample
-    return yaw
+    return IntegratedAxis(
+        final_deg=angle,
+        min_deg=min_angle,
+        max_deg=max_angle,
+        range_deg=max_angle - min_angle,
+    )
 
 
 def summarize_imu_log(samples: list[ImuSample]) -> ImuReplaySummary:
     if not samples:
-        return ImuReplaySummary(0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        empty_axis = IntegratedAxis(0.0, 0.0, 0.0, 0.0)
+        return ImuReplaySummary(0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, empty_axis, empty_axis, empty_axis)
 
     duration = max(0.0, samples[-1].timestamp - samples[0].timestamp)
     average_hz = (len(samples) - 1) / duration if duration > 0 and len(samples) > 1 else 0.0
@@ -61,5 +81,7 @@ def summarize_imu_log(samples: list[ImuSample]) -> ImuReplaySummary:
         gyro_x_avg_dps=sum(sample.gyro_x_dps for sample in samples) / len(samples),
         gyro_y_avg_dps=sum(sample.gyro_y_dps for sample in samples) / len(samples),
         gyro_z_avg_dps=sum(sample.gyro_z_dps for sample in samples) / len(samples),
-        yaw_z_delta_deg=integrate_yaw_z(samples),
+        integrated_x_deg=integrate_axis(samples, "x"),
+        integrated_y_deg=integrate_axis(samples, "y"),
+        integrated_z_deg=integrate_axis(samples, "z"),
     )
