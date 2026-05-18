@@ -120,7 +120,7 @@ Replay a saved IMU log on a laptop or Pi:
 
 ```bash
 python3 scripts/replay_imu_log.py logs/imu_YYYYMMDD_HHMMSS.jsonl
-python3 scripts/replay_imu_log.py logs/imu_YYYYMMDD_HHMMSS.jsonl --viz
+python3 scripts/replay_imu_log.py logs/imu_YYYYMMDD_HHMMSS.jsonl --no-viz
 ```
 
 Run the real bridge with a gentle cap:

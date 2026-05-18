@@ -46,14 +46,14 @@ def replay_viz(samples, speed: float) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Replay an IMU JSONL log.")
     parser.add_argument("log_path", help="Path to logs/imu_*.jsonl")
-    parser.add_argument("--viz", action="store_true", help="Replay samples through the same pygame IMU visualization")
-    parser.add_argument("--speed", type=float, default=1.0, help="Playback speed multiplier for --viz")
+    parser.add_argument("--no-viz", action="store_true", help="Only print the replay summary")
+    parser.add_argument("--speed", type=float, default=1.0, help="Playback speed multiplier")
     args = parser.parse_args()
 
     samples = load_imu_log(args.log_path)
     summary = summarize_imu_log(samples)
     print_summary(args.log_path, summary)
-    if args.viz:
+    if not args.no_viz:
         replay_viz(samples, args.speed)
 
 
