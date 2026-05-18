@@ -102,6 +102,12 @@ python3 scripts/run_gnss_live.py --log
 
 The GNSS script uses `pynmea2` to read NMEA sentences such as GGA/RMC from the serial port in `config/boat.local.json`, prints fix/lat/lon/speed/heading, and writes JSONL logs under `logs/` when `--log` is used.
 
+Replay a saved GNSS log:
+
+```bash
+python3 scripts/replay_gnss_log.py logs/gnss_YYYYMMDD_HHMMSS.jsonl
+```
+
 If an MPU-6050 is connected over I2C, test it separately:
 
 ```bash

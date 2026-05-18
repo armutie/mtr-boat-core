@@ -3,9 +3,6 @@ from __future__ import annotations
 import time
 from dataclasses import asdict, dataclass
 
-import pynmea2
-import serial
-
 
 @dataclass
 class GnssFix:
@@ -52,6 +49,8 @@ def _fix_label_gga(quality) -> str:
 
 
 def parse_nmea_sentence(sentence: str, source: str = "nmea", timestamp: float | None = None) -> GnssFix | None:
+    import pynmea2
+
     try:
         msg = pynmea2.parse(sentence.strip())
     except pynmea2.ParseError:
@@ -90,6 +89,8 @@ def parse_nmea_sentence(sentence: str, source: str = "nmea", timestamp: float | 
 
 class NmeaReader:
     def __init__(self, port: str, baud: int = 9600, timeout: float = 1.0):
+        import serial
+
         self.ser = serial.Serial(port, baudrate=baud, timeout=timeout)
 
     def read_fix(self) -> GnssFix | None:
