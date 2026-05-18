@@ -116,6 +116,13 @@ python3 scripts/run_imu_live.py --viz
 
 The IMU script reads accel/gyro samples, zero-calibrates gyro drift at startup while the board is still, prints live values, and writes JSONL logs under `logs/` when `--log` is used.
 
+Replay a saved IMU log on a laptop or Pi:
+
+```bash
+python3 scripts/replay_imu_log.py logs/imu_YYYYMMDD_HHMMSS.jsonl
+python3 scripts/replay_imu_log.py logs/imu_YYYYMMDD_HHMMSS.jsonl --viz
+```
+
 Run the real bridge with a gentle cap:
 
 ```bash

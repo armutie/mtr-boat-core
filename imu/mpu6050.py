@@ -4,8 +4,6 @@ import math
 import time
 from dataclasses import asdict, dataclass
 
-import smbus2
-
 
 @dataclass
 class GyroBias:
@@ -39,6 +37,8 @@ class Mpu6050:
         self.bus_id = bus
         self.address = address
         self.source = source or f"i2c-{bus}:0x{address:02x}"
+        import smbus2
+
         self.bus = smbus2.SMBus(bus)
         self.bus.write_byte_data(self.address, self.PWR_MGMT_1, 0)
 
