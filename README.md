@@ -114,7 +114,7 @@ Use the visual trace view when a display is available:
 python3 scripts/run_imu_live.py --viz
 ```
 
-The IMU script reads accel/gyro samples, zero-calibrates gyro drift at startup while the board is still, prints live values, and writes JSONL logs under `logs/` when `--log` is used.
+The IMU script reads accel/gyro samples, zero-calibrates gyro drift at startup while the board is still, prints live values with relative yaw from startup, and writes JSONL logs under `logs/` when `--log` is used.
 
 Replay a saved IMU log on a laptop or Pi:
 

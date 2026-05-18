@@ -12,7 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from boat_core.config import choose, load_boat_config, section
-from imu import GyroBias, ImuSample, Mpu6050
+from imu import GyroBias, ImuSample, Mpu6050, RelativeYawTracker
 from imu.viz import ImuViz
 
 
@@ -34,12 +34,20 @@ def default_log_path() -> Path:
     return Path("logs") / f"imu_{stamp}.jsonl"
 
 
-def print_sample(sample: ImuSample) -> None:
+def sample_record(sample: ImuSample, yaw_relative_deg: float, dt_s: float) -> dict:
+    record = sample.to_record()
+    record["yaw_relative_deg"] = yaw_relative_deg
+    record["dt_s"] = dt_s
+    return record
+
+
+def print_sample(sample: ImuSample, yaw_relative_deg: float) -> None:
     print(
         "[IMU] "
         f"accel_g=({sample.accel_x_g:+.3f},{sample.accel_y_g:+.3f},{sample.accel_z_g:+.3f}) "
         f"|a|={sample.accel_mag_g:.3f} "
-        f"gyro_dps=({sample.gyro_x_dps:+.2f},{sample.gyro_y_dps:+.2f},{sample.gyro_z_dps:+.2f})"
+        f"gyro_dps=({sample.gyro_x_dps:+.2f},{sample.gyro_y_dps:+.2f},{sample.gyro_z_dps:+.2f}) "
+        f"yaw_rel={yaw_relative_deg:+.2f} deg"
     )
 
 
@@ -78,16 +86,18 @@ def main() -> None:
                 bias = imu.calibrate_gyro(samples=args.calibration_samples)
                 print(f"[IMU] Gyro bias gx={bias.x_dps:.2f}, gy={bias.y_dps:.2f}, gz={bias.z_dps:.2f} dps")
 
+            yaw = RelativeYawTracker()
             while True:
                 sample = imu.read_sample(bias=bias)
+                yaw_relative_deg, dt_s = yaw.update(sample)
                 if log_file is not None:
-                    log_file.write(json.dumps(sample.to_record(), separators=(",", ":")) + "\n")
+                    log_file.write(json.dumps(sample_record(sample, yaw_relative_deg, dt_s), separators=(",", ":")) + "\n")
                     log_file.flush()
                 if viz is not None:
                     if not viz.update(sample, bias):
                         break
                 else:
-                    print_sample(sample)
+                    print_sample(sample, yaw_relative_deg)
                     time.sleep(delay_s)
     except KeyboardInterrupt:
         print("\n[IMU] Stopped.")

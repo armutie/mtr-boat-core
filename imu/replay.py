@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 from .mpu6050 import ImuSample
+
+
+IMU_SAMPLE_FIELDS = {field.name for field in fields(ImuSample)}
 
 
 @dataclass
@@ -38,7 +41,8 @@ def load_imu_log(path: str | Path) -> list[ImuSample]:
             if not line:
                 continue
             record = json.loads(line)
-            samples.append(ImuSample(**record))
+            sample_record = {key: value for key, value in record.items() if key in IMU_SAMPLE_FIELDS}
+            samples.append(ImuSample(**sample_record))
     samples.sort(key=lambda sample: sample.timestamp)
     return samples
 
