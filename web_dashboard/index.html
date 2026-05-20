@@ -3,142 +3,257 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>MTR Sensor Deck</title>
-    <link rel="stylesheet" href="styles.css" />
+    <title>MTR Boat HUD</title>
+    <link rel="stylesheet" href="styles.css?v=light-hud-2" />
   </head>
   <body>
-    <main class="shell">
+    <main class="deck">
       <header class="topbar">
-        <div>
-          <p class="eyebrow">MTR Sensor Deck</p>
-          <h1>Realtime boat perception</h1>
+        <div class="brand">
+          <span class="kicker">MTR</span>
+          <h1>Boat HUD</h1>
         </div>
-        <div class="connection">
-          <span id="connection-dot" class="dot"></span>
-          <span id="connection-label">connecting</span>
-        </div>
+        <nav class="tabs" aria-label="Dashboard views">
+          <button class="tab active" type="button" data-tab="overview">Overview</button>
+          <button class="tab" type="button" data-tab="radar">Radar</button>
+          <button class="tab" type="button" data-tab="gnss">GNSS</button>
+          <button class="tab" type="button" data-tab="imu">IMU</button>
+        </nav>
+        <section class="stream-card" data-health="waiting">
+          <span id="stream-dot" class="status-dot"></span>
+          <div>
+            <strong id="stream-label">connecting</strong>
+            <span id="stream-meta">waiting for stream</span>
+          </div>
+        </section>
       </header>
 
-      <nav class="tabs" aria-label="Sensor views">
-        <button class="tab active" data-tab="overview">Overview</button>
-        <button class="tab" data-tab="mmwave">mmWave</button>
-        <button class="tab" data-tab="gnss">GNSS</button>
-        <button class="tab" data-tab="sonar">Sonar</button>
-        <button class="tab" data-tab="ultrasonic">Ultrasonic</button>
-      </nav>
-
-      <section id="overview" class="view active">
-        <div class="status-grid">
-          <article class="metric">
-            <span>mmWave</span>
-            <strong id="health-mmwave">--</strong>
-          </article>
-          <article class="metric">
-            <span>GNSS</span>
-            <strong id="health-gnss">--</strong>
-          </article>
-          <article class="metric">
-            <span>Sonar</span>
-            <strong id="health-sonar">--</strong>
-          </article>
-          <article class="metric">
-            <span>Ultrasonic</span>
-            <strong id="health-ultrasonic">--</strong>
-          </article>
-        </div>
-        <div class="overview-grid">
-          <section class="panel radar-panel">
+      <section id="overview" class="view active" aria-label="Overview">
+        <section class="cockpit">
+          <article class="panel radar-primary" data-health="waiting">
             <div class="panel-head">
-              <h2>Obstacle Field</h2>
-              <span id="command-pill" class="pill">--</span>
+              <div>
+                <span class="panel-tag">mmWave</span>
+                <h2>Radar Field</h2>
+              </div>
+              <div class="command-stack">
+                <span id="overview-mmwave-health" class="health-chip" data-health="waiting">waiting</span>
+                <strong id="overview-command">unavailable</strong>
+              </div>
             </div>
-            <canvas id="radar-overview" width="640" height="420"></canvas>
-          </section>
-          <section class="panel">
+            <canvas id="radar-overview" width="720" height="442"></canvas>
+            <div class="radar-footer">
+              <div class="zone-meter zone-left">
+                <span>Left</span>
+                <i id="overview-zone-left"></i>
+              </div>
+              <div class="zone-meter zone-front">
+                <span>Front</span>
+                <i id="overview-zone-front"></i>
+              </div>
+              <div class="zone-meter zone-right">
+                <span>Right</span>
+                <i id="overview-zone-right"></i>
+              </div>
+              <p id="overview-reason">No mmWave feed connected.</p>
+            </div>
+          </article>
+
+          <aside class="overview-side">
+            <article class="panel mini-map" data-health="waiting">
+              <div class="panel-head compact">
+                <div>
+                  <span class="panel-tag">GNSS</span>
+                  <h2>Position</h2>
+                </div>
+                <span id="overview-gnss-health" class="health-chip" data-health="waiting">waiting</span>
+              </div>
+              <canvas id="position-overview" width="320" height="178"></canvas>
+              <div class="readout-grid four-pack">
+                <span>Speed <b id="overview-speed">--</b></span>
+                <span>Heading <b id="overview-heading">--</b></span>
+                <span>Fix <b id="overview-fix">--</b></span>
+                <span>Sats <b id="overview-sats">--</b></span>
+              </div>
+            </article>
+
+            <div class="side-row">
+              <article class="panel attitude-card" data-health="waiting">
+                <div class="panel-head compact">
+                  <div>
+                    <span class="panel-tag">IMU</span>
+                    <h2>Pitch</h2>
+                  </div>
+                  <span id="overview-imu-health" class="health-chip" data-health="waiting">waiting</span>
+                </div>
+                <canvas id="attitude-overview" width="170" height="170"></canvas>
+              </article>
+
+              <article class="panel signal-card">
+                <div class="trace-block">
+                  <span class="panel-tag">Throttle</span>
+                  <canvas id="throttle-overview" width="226" height="74"></canvas>
+                  <strong id="overview-throttle">--</strong>
+                </div>
+                <div class="trace-block">
+                  <span class="panel-tag">Accel</span>
+                  <canvas id="accel-overview" width="226" height="74"></canvas>
+                  <strong id="overview-accel">--</strong>
+                </div>
+              </article>
+            </div>
+          </aside>
+        </section>
+      </section>
+
+      <section id="radar" class="view" aria-label="Radar details">
+        <section class="detail-grid radar-detail-grid">
+          <article class="panel detail-main" data-health="waiting">
             <div class="panel-head">
-              <h2>Position</h2>
-              <span id="fix-pill" class="pill">--</span>
+              <div>
+                <span class="panel-tag">mmWave detail</span>
+                <h2>Point Cloud</h2>
+              </div>
+              <div class="command-stack">
+                <span id="radar-health" class="health-chip" data-health="waiting">waiting</span>
+                <strong id="radar-command">unavailable</strong>
+              </div>
             </div>
-            <div class="map-card">
-              <div id="boat-marker" class="boat-marker"></div>
-              <div class="map-grid"></div>
-            </div>
-            <div class="readout two">
-              <span>Lat <b id="lat">--</b></span>
-              <span>Lon <b id="lon">--</b></span>
-              <span>Speed <b id="speed">--</b></span>
-              <span>Heading <b id="heading">--</b></span>
-            </div>
-          </section>
-        </div>
-      </section>
+            <canvas id="radar-detail" width="890" height="510"></canvas>
+          </article>
 
-      <section id="mmwave" class="view">
-        <section class="panel full">
-          <div class="panel-head">
-            <h2>mmWave Point Cloud</h2>
-            <span id="point-count" class="pill">0 points</span>
-          </div>
-          <canvas id="radar-detail" width="960" height="520"></canvas>
-          <div class="readout four">
-            <span>Frame <b id="mmwave-frame">--</b></span>
-            <span>Raw <b id="mmwave-raw">--</b></span>
-            <span>Filtered <b id="mmwave-filtered">--</b></span>
-            <span>Clusters <b id="mmwave-clusters">--</b></span>
-          </div>
-          <div class="zone-row">
-            <div><span>Left Score</span><meter id="zone-left" min="0" max="1"></meter></div>
-            <div><span>Front Score</span><meter id="zone-front" min="0" max="1"></meter></div>
-            <div><span>Right Score</span><meter id="zone-right" min="0" max="1"></meter></div>
-          </div>
-          <div class="readout four">
-            <span>Throttle <b id="mmwave-throttle">--</b></span>
-            <span>Target Throttle <b id="mmwave-target-throttle">--</b></span>
-            <span>Steering <b id="mmwave-steering">--</b></span>
-            <span>Target Steering <b id="mmwave-target-steering">--</b></span>
-          </div>
-          <p id="mmwave-reason" class="reason">No mmWave feed connected.</p>
+          <aside class="detail-side">
+            <article class="panel stat-panel">
+              <div class="panel-head compact">
+                <span class="panel-tag">Counts</span>
+                <span id="radar-age" class="tiny-chip">--</span>
+              </div>
+              <div class="readout-grid">
+                <span>Frame <b id="radar-frame">--</b></span>
+                <span>Raw <b id="radar-raw">--</b></span>
+                <span>Filtered <b id="radar-filtered">--</b></span>
+                <span>Clusters <b id="radar-clusters">--</b></span>
+              </div>
+            </article>
+
+            <article class="panel stat-panel">
+              <span class="panel-tag">Noise</span>
+              <div class="readout-grid">
+                <span>Rejected <b id="radar-rejected">--</b></span>
+                <span>Filter <b id="radar-filter-ratio">--</b></span>
+                <span>Singles <b id="radar-singletons">--</b></span>
+                <span>SNR Avg <b id="radar-snr">--</b></span>
+                <span>Doppler <b id="radar-doppler">--</b></span>
+              </div>
+            </article>
+
+            <article class="panel stat-panel">
+              <span class="panel-tag">Control</span>
+              <div class="bar-stack">
+                <label>Throttle <i id="radar-throttle-bar"></i><b id="radar-throttle">--</b></label>
+                <label>Target <i id="radar-target-throttle-bar"></i><b id="radar-target-throttle">--</b></label>
+                <label>Steering <i id="radar-steering-bar"></i><b id="radar-steering">--</b></label>
+                <label>Target <i id="radar-target-steering-bar"></i><b id="radar-target-steering">--</b></label>
+              </div>
+            </article>
+
+            <article class="panel stat-panel reason-panel">
+              <span class="panel-tag">Reason</span>
+              <p id="radar-reason">No mmWave feed connected.</p>
+              <pre id="radar-metadata">{}</pre>
+            </article>
+          </aside>
         </section>
       </section>
 
-      <section id="gnss" class="view">
-        <section class="panel full">
-          <div class="panel-head">
-            <h2>GNSS Track</h2>
-            <span id="sat-pill" class="pill">-- sats</span>
-          </div>
-          <div class="track">
-            <canvas id="track-canvas" width="960" height="480"></canvas>
-          </div>
-          <div class="readout four">
-            <span>Fix <b id="gnss-fix">--</b></span>
-            <span>HDOP <b id="hdop">--</b></span>
-            <span>Speed <b id="gnss-speed">--</b></span>
-            <span>Heading <b id="gnss-heading">--</b></span>
-          </div>
+      <section id="gnss" class="view" aria-label="GNSS details">
+        <section class="detail-grid">
+          <article class="panel detail-main" data-health="waiting">
+            <div class="panel-head">
+              <div>
+                <span class="panel-tag">GNSS</span>
+                <h2>Track</h2>
+              </div>
+              <span id="gnss-health" class="health-chip" data-health="waiting">waiting</span>
+            </div>
+            <canvas id="gnss-detail" width="890" height="510"></canvas>
+          </article>
+
+          <aside class="detail-side">
+            <article class="panel compass-panel" data-health="waiting">
+              <canvas id="gnss-compass" width="250" height="250"></canvas>
+            </article>
+            <article class="panel stat-panel">
+              <span class="panel-tag">Fix</span>
+              <div class="readout-grid">
+                <span>Lat <b id="gnss-lat">--</b></span>
+                <span>Lon <b id="gnss-lon">--</b></span>
+                <span>Speed <b id="gnss-speed">--</b></span>
+                <span>Heading <b id="gnss-heading">--</b></span>
+                <span>Fix <b id="gnss-fix">--</b></span>
+                <span>Sats <b id="gnss-sats">--</b></span>
+                <span>HDOP <b id="gnss-hdop">--</b></span>
+                <span>Age <b id="gnss-age">--</b></span>
+              </div>
+            </article>
+            <article class="panel stat-panel">
+              <span class="panel-tag">Session</span>
+              <p id="gnss-source" class="mono-line">--</p>
+              <p id="session-logging" class="mono-line">--</p>
+            </article>
+          </aside>
         </section>
       </section>
 
-      <section id="sonar" class="view">
-        <section class="panel full">
-          <div class="panel-head">
-            <h2>Sonar Range</h2>
-            <span class="pill">meters</span>
-          </div>
-          <div id="sonar-bars" class="range-bars"></div>
-        </section>
-      </section>
+      <section id="imu" class="view" aria-label="IMU details">
+        <section class="detail-grid">
+          <article class="panel detail-main" data-health="waiting">
+            <div class="panel-head">
+              <div>
+                <span class="panel-tag">IMU</span>
+                <h2>Attitude</h2>
+              </div>
+              <span id="imu-health" class="health-chip" data-health="waiting">waiting</span>
+            </div>
+            <div class="imu-stage">
+              <canvas id="imu-attitude" width="470" height="470"></canvas>
+              <canvas id="imu-accel-trace" width="390" height="470"></canvas>
+            </div>
+          </article>
 
-      <section id="ultrasonic" class="view">
-        <section class="panel full">
-          <div class="panel-head">
-            <h2>Ultrasonic Range</h2>
-            <span class="pill">centimeters</span>
-          </div>
-          <div id="ultrasonic-bars" class="range-bars compact"></div>
+          <aside class="detail-side">
+            <article class="panel stat-panel">
+              <span class="panel-tag">Acceleration</span>
+              <div class="readout-grid">
+                <span>X <b id="imu-ax">--</b></span>
+                <span>Y <b id="imu-ay">--</b></span>
+                <span>Z <b id="imu-az">--</b></span>
+                <span>Mag <b id="imu-amag">--</b></span>
+              </div>
+            </article>
+            <article class="panel stat-panel">
+              <span class="panel-tag">Gyro</span>
+              <div class="bar-stack">
+                <label>X <i id="imu-gx-bar"></i><b id="imu-gx">--</b></label>
+                <label>Y <i id="imu-gy-bar"></i><b id="imu-gy">--</b></label>
+                <label>Z <i id="imu-gz-bar"></i><b id="imu-gz">--</b></label>
+              </div>
+            </article>
+            <article class="panel stat-panel">
+              <span class="panel-tag">State</span>
+              <div class="readout-grid">
+                <span>Yaw <b id="imu-yaw">--</b></span>
+                <span>dt <b id="imu-dt">--</b></span>
+                <span>Age <b id="imu-age">--</b></span>
+                <span>Source <b id="imu-source">--</b></span>
+              </div>
+              <p id="imu-bias" class="mono-line">bias --</p>
+            </article>
+          </aside>
         </section>
       </section>
     </main>
-    <script src="app.js"></script>
+
+    <script src="app.js?v=light-hud-2"></script>
   </body>
 </html>

@@ -11,7 +11,7 @@
   },
   "gnss": {
     "port": "/dev/ttyACM2",
-    "baud": 9600
+    "baud": 38400
   },
   "imu": {
     "bus": 2,

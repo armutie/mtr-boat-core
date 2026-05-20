@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 logs/
+output/
 *.png
 *.csv
 config/boat.local.json

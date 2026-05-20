@@ -106,6 +106,9 @@ Replay a saved GNSS log:
 
 ```bash
 python3 scripts/replay_gnss_log.py logs/gnss_YYYYMMDD_HHMMSS.jsonl
+python3 scripts/replay_gnss_log.py logs/gnss_YYYYMMDD_HHMMSS.jsonl --html
+python3 scripts/replay_gnss_log.py logs/gnss_YYYYMMDD_HHMMSS.jsonl --map
+python3 scripts/replay_gnss_log.py logs/gnss_YYYYMMDD_HHMMSS.jsonl --map --speed
 ```
 
 If an MPU-6050 is connected over I2C, test it separately:
@@ -247,11 +250,24 @@ Missing before ROS2 becomes the main autonomous runtime:
 
 ## Dashboard
 
-Run the browser dashboard from the robot or development laptop:
+Deploy the latest code from a Windows laptop to the Orange Pi:
+
+```powershell
+.\scripts\deploy_pi.ps1 -HostName <orange-pi-ip-or-hostname>
+```
+
+Run the browser dashboard from the robot:
 
 ```bash
-python3 web_dashboard/server.py --ros --mmwave-topic radar/nav_state_json
+python3 web_dashboard/server.py
 ```
+
+By default the dashboard binds to `0.0.0.0`, auto-starts the IMU reader, starts
+direct mmWave/GNSS readers when their local serial device files are present, and
+leaves missing feeds unavailable or error-marked. Use `--demo` for UI-only
+testing, `--ros --mmwave-topic radar/nav_state_json` for a ROS mmWave feed, or
+`--no-mmwave`, `--no-gnss`, and `--no-imu` to disable a local reader while
+debugging.
 
 Open:
 
@@ -265,6 +281,11 @@ For UI-only testing without sensors:
 ```bash
 python3 web_dashboard/server.py --demo
 ```
+
+When direct serial sensor mode is enabled, the configured port is tried first. If
+it cannot be opened, the dashboard falls back through the common Linux device
+names `/dev/ttyACM0`-`/dev/ttyACM2` and `/dev/ttyUSB0`-`/dev/ttyUSB2` as
+appropriate, then reports the selected port in the live metadata.
 
 The dashboard intentionally marks missing GNSS, sonar, and ultrasonic feeds unavailable until those feeds exist.
 
