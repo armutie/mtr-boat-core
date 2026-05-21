@@ -28,6 +28,11 @@ body {
   background: var(--bg);
   font-family: "Bahnschrift", "Aptos Display", "Segoe UI", sans-serif;
   letter-spacing: 0;
+  /* Disable pull-to-refresh and rubber-band overscroll on mobile so a panic
+     swipe at the top of the page can never reload the dashboard mid-run. */
+  overscroll-behavior: none;
+  /* Kill the gray tap flash that mobile browsers paint on every button. */
+  -webkit-tap-highlight-color: transparent;
 }
 
 button,
@@ -38,6 +43,23 @@ canvas {
 body {
   overflow-x: hidden;
   overflow-y: auto;
+}
+
+/* Make the manual control area feel like a native app: no text selection,
+   no callout menu when long-pressing a live readout, no double-tap zoom on
+   buttons. The canvases keep their existing touch-action:none so they
+   capture drags without scrolling the page. Pinch-zoom for accessibility
+   is intentionally NOT disabled. */
+.control-surface {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.mode-pill,
+.stop-button,
+.chip-toggle {
+  touch-action: manipulation;
 }
 
 .deck {
@@ -97,7 +119,7 @@ h2 {
 
 .tabs {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 6px;
   padding: 6px;
 }
@@ -179,6 +201,417 @@ h2 {
 
 .view.active {
   display: block;
+}
+
+.control-surface {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(280px, 360px) minmax(280px, 1fr);
+  gap: 14px;
+  min-height: calc(100vh - 110px);
+  align-items: stretch;
+  justify-items: stretch;
+  transition: filter 160ms ease;
+}
+
+.control-surface[data-degraded="true"] {
+  filter: saturate(0.35) brightness(0.92);
+  pointer-events: none;
+}
+
+.control-surface[data-degraded="true"] .comms-overlay {
+  display: grid;
+  place-items: center;
+  pointer-events: auto;
+}
+
+.comms-overlay {
+  display: none;
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 253, 244, 0.82);
+  z-index: 5;
+  border-radius: 8px;
+}
+
+.comms-message {
+  display: grid;
+  gap: 4px;
+  padding: 18px 24px;
+  border: 3px solid var(--red);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  text-align: center;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.comms-message strong {
+  color: var(--red);
+  font-size: 22px;
+  letter-spacing: 0.02em;
+}
+
+.comms-message span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.drive-zone {
+  display: grid;
+  grid-template-rows: 46px 1fr auto auto;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 4px 0;
+  justify-items: stretch;
+}
+
+.drive-command {
+  display: grid;
+  grid-template-rows: auto auto auto auto auto auto auto;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 4px 0;
+  align-content: stretch;
+}
+
+.drive-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 46px;
+}
+
+.drive-head.center {
+  justify-content: center;
+  text-align: center;
+}
+
+.drive-head h2 {
+  font-size: clamp(22px, 3vw, 38px);
+}
+
+.head-trailing {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.control-value {
+  color: var(--ink);
+  font-size: 34px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+
+.wheel-wrap,
+.throttle-wrap {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  min-height: 360px;
+  height: clamp(320px, 52vh, 460px);
+}
+
+#manual-wheel {
+  width: min(100%, 360px);
+  height: min(100%, 360px);
+  aspect-ratio: 1;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+#manual-wheel:active {
+  cursor: grabbing;
+}
+
+#manual-wheel:focus-visible {
+  outline: 3px solid var(--orange);
+  outline-offset: 4px;
+}
+
+#manual-throttle {
+  width: min(200px, 70%);
+  height: 100%;
+  max-height: 460px;
+  background: #f7efd9;
+  border: 4px solid var(--hard-line);
+  border-radius: 12px;
+  cursor: ns-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+#manual-throttle:focus-visible {
+  outline: 3px solid var(--orange);
+  outline-offset: 4px;
+}
+
+.magnitude-bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 18px;
+  border: 2px solid var(--hard-line);
+  border-radius: 6px;
+  background: #fff7df;
+  overflow: hidden;
+}
+
+.steer-bar {
+  --fill: 0;
+}
+
+.steer-bar .bar-tick {
+  position: absolute;
+  left: 50%;
+  top: -4px;
+  bottom: -4px;
+  width: 2px;
+  background: var(--hard-line);
+  transform: translateX(-50%);
+  z-index: 2;
+}
+
+.steer-bar .bar-fill {
+  height: 100%;
+  width: 50%;
+  display: block;
+  position: relative;
+}
+
+.steer-bar .bar-left {
+  background: linear-gradient(270deg, var(--red) 0%, transparent 100%);
+  transform-origin: right center;
+  transform: scaleX(var(--fill, 0));
+}
+
+.steer-bar .bar-right {
+  background: linear-gradient(90deg, var(--orange) 0%, transparent 100%);
+  transform-origin: left center;
+  transform: scaleX(var(--fill, 0));
+}
+
+.throttle-bar {
+  height: 18px;
+}
+
+.throttle-bar .bar-up {
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(90deg, var(--green) 0%, var(--yellow) 100%);
+  transform-origin: left center;
+  transform: scaleX(var(--fill, 0));
+}
+
+.chip-toggle {
+  align-self: start;
+  padding: 6px 12px;
+  border: 2px solid var(--line);
+  border-radius: 99px;
+  background: #fff7df;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.chip-toggle[aria-pressed="true"] {
+  border-color: var(--cyan);
+  color: var(--ink);
+  background: #d9efea;
+}
+
+.mode-switch {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  padding: 6px;
+  border: 3px solid var(--hard-line);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.mode-pill {
+  border: 2px solid transparent;
+  background: #f7efd9;
+  color: var(--muted);
+  border-radius: 7px;
+  padding: 14px 10px;
+  font-size: 16px;
+  font-weight: 900;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.mode-pill:hover,
+.mode-pill:focus-visible {
+  color: var(--ink);
+  border-color: var(--orange);
+  outline: none;
+}
+
+.mode-pill[aria-checked="true"] {
+  color: var(--ink);
+  background: var(--yellow);
+  box-shadow: inset 0 0 0 2px var(--hard-line);
+}
+
+.mode-pill[data-mode="manual"][aria-checked="true"] {
+  background: var(--green);
+  color: #fffdf4;
+}
+
+.mode-pill[data-mode="auto"][aria-checked="true"] {
+  background: var(--blue);
+  color: #fffdf4;
+}
+
+.stop-button {
+  width: 100%;
+  border: 3px solid var(--hard-line);
+  border-radius: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+  cursor: pointer;
+  align-self: center;
+  min-height: 130px;
+  color: #fffdf4;
+  background: var(--red);
+  font-size: 40px;
+  letter-spacing: 0.04em;
+  box-shadow: 0 10px 0 rgba(44, 34, 48, 0.18);
+  transition: transform 80ms ease, box-shadow 80ms ease, background 80ms ease;
+}
+
+.stop-button:active {
+  transform: translateY(6px);
+  box-shadow: 0 4px 0 rgba(44, 34, 48, 0.18);
+}
+
+.stop-button[data-pressed="true"] {
+  animation: stop-flash 220ms ease 3;
+}
+
+@keyframes stop-flash {
+  0%, 100% { background: var(--red); }
+  50% { background: #ffd0d6; color: var(--red); }
+}
+
+.staleness {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 2px solid var(--line);
+  border-radius: 6px;
+  background: #fff7df;
+}
+
+.staleness label {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.staleness-track {
+  position: relative;
+  height: 8px;
+  border: 2px solid var(--hard-line);
+  border-radius: 99px;
+  overflow: hidden;
+}
+
+.staleness-track i {
+  display: block;
+  height: 100%;
+  width: var(--fill, 0%);
+  background: linear-gradient(90deg, var(--red), var(--orange), var(--green));
+}
+
+#staleness-label {
+  font-size: 11px;
+  font-weight: 900;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.control-readouts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.control-readouts.stacked {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.compact-status {
+  margin-top: 6px;
+}
+
+.control-readouts span {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 2px solid var(--line);
+  border-radius: 6px;
+  background: #fff7df;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+}
+
+.control-readouts b {
+  color: var(--ink);
+}
+
+.control-reason {
+  min-height: 32px;
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.control-banner {
+  margin: 0;
+  padding: 10px 12px;
+  border: 2px solid var(--blue);
+  border-radius: 6px;
+  background: #e1ecf6;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  text-align: center;
+}
+
+.control-banner[data-tone="warn"] {
+  border-color: var(--orange);
+  background: #ffe5cc;
+}
+
+.control-banner[data-tone="error"] {
+  border-color: var(--red);
+  background: #ffd0d6;
+  color: var(--red);
 }
 
 .cockpit {
@@ -552,7 +985,8 @@ pre {
   .topbar,
   .cockpit,
   .detail-grid,
-  .imu-stage {
+  .imu-stage,
+  .control-surface {
     grid-template-columns: 1fr;
     height: auto;
   }
@@ -581,5 +1015,54 @@ pre {
   .radar-footer,
   .readout-grid.four-pack {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .control-surface {
+    min-height: 0;
+    grid-template-columns: 1fr;
+  }
+
+  .wheel-wrap,
+  .throttle-wrap {
+    min-height: 280px;
+    height: clamp(280px, 42vh, 400px);
+    max-height: none;
+  }
+
+  #manual-throttle {
+    width: min(220px, 70vw);
+    height: 100%;
+    max-height: 400px;
+  }
+
+  .stop-button {
+    min-height: 96px;
+    font-size: 34px;
+  }
+}
+
+@media (max-width: 620px) {
+  .tabs {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .control-readouts,
+  .control-readouts.stacked {
+    grid-template-columns: 1fr;
+  }
+
+  .control-value {
+    font-size: 28px;
+  }
+
+  .mode-pill {
+    font-size: 15px;
+    padding: 16px 6px;
+    min-height: 48px;
+  }
+
+  .chip-toggle {
+    min-height: 36px;
+    padding: 8px 12px;
   }
 }

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>MTR Boat HUD</title>
-    <link rel="stylesheet" href="styles.css?v=light-hud-2" />
+    <link rel="stylesheet" href="styles.css?v=control-v5" />
   </head>
   <body>
     <main class="deck">
@@ -14,7 +14,8 @@
           <h1>Boat HUD</h1>
         </div>
         <nav class="tabs" aria-label="Dashboard views">
-          <button class="tab active" type="button" data-tab="overview">Overview</button>
+          <button class="tab active" type="button" data-tab="control">Control</button>
+          <button class="tab" type="button" data-tab="overview">Overview</button>
           <button class="tab" type="button" data-tab="radar">Radar</button>
           <button class="tab" type="button" data-tab="gnss">GNSS</button>
           <button class="tab" type="button" data-tab="imu">IMU</button>
@@ -28,7 +29,83 @@
         </section>
       </header>
 
-      <section id="overview" class="view active" aria-label="Overview">
+      <section id="control" class="view active" aria-label="Manual controls">
+        <section class="control-surface" data-mode="off" data-degraded="false">
+          <article class="drive-zone steer-zone">
+            <div class="drive-head">
+              <h2>Steering</h2>
+              <div class="head-trailing">
+                <button id="manual-spring-toggle" class="chip-toggle" type="button" aria-pressed="true">Spring: on</button>
+                <strong id="manual-steering-value" class="control-value">+0.00</strong>
+              </div>
+            </div>
+            <div class="wheel-wrap">
+              <canvas id="manual-wheel" width="380" height="380" role="slider" aria-label="Steering wheel" aria-valuemin="-1" aria-valuemax="1" aria-valuenow="0" tabindex="0"></canvas>
+            </div>
+            <div class="magnitude-bar steer-bar" aria-hidden="true">
+              <i class="bar-fill bar-left" style="--fill:0"></i>
+              <span class="bar-tick"></span>
+              <i class="bar-fill bar-right" style="--fill:0"></i>
+            </div>
+            <div class="control-readouts">
+              <span title="Asked-for thrust on the left side after differential mix (0..1)">Intent L <b id="manual-left-intent">0.00</b></span>
+              <span title="Asked-for thrust on the right side after differential mix (0..1)">Intent R <b id="manual-right-intent">0.00</b></span>
+            </div>
+          </article>
+
+          <article class="drive-command">
+            <div class="drive-head center">
+              <h2>Drive</h2>
+            </div>
+            <div class="mode-switch" role="radiogroup" aria-label="Drive mode">
+              <button class="mode-pill" type="button" data-mode="off" role="radio" aria-checked="true">Off</button>
+              <button class="mode-pill" type="button" data-mode="manual" role="radio" aria-checked="false">Manual</button>
+              <button class="mode-pill" type="button" data-mode="auto" role="radio" aria-checked="false">Auto</button>
+            </div>
+            <button id="manual-stop" class="stop-button" type="button" aria-keyshortcuts="Space Escape">Stop</button>
+            <div class="staleness">
+              <label>Command freshness</label>
+              <div class="staleness-track" aria-hidden="true"><i id="staleness-fill"></i></div>
+              <span id="staleness-label">--</span>
+            </div>
+            <div class="control-readouts stacked compact-status">
+              <span title="Current drive mode reported by the server">Mode <b id="manual-mode">off</b></span>
+              <span title="dry-run = simulation, not driving real motors. live = serial port open to ESP32.">Actuator <b id="manual-actuator">dry-run</b></span>
+              <span title="Microsecond pulse width sent to the LEFT thruster ESC. 1500 = neutral, 1000 = full reverse, 2000 = full forward.">PWM L <b id="manual-pwm-left">1500</b></span>
+              <span title="Microsecond pulse width sent to the RIGHT thruster ESC. 1500 = neutral, 1000 = full reverse, 2000 = full forward.">PWM R <b id="manual-pwm-right">1500</b></span>
+            </div>
+            <p id="manual-reason" class="control-reason">drive off</p>
+            <p id="manual-banner" class="control-banner" hidden></p>
+          </article>
+
+          <article class="drive-zone throttle-zone">
+            <div class="drive-head">
+              <h2>Throttle</h2>
+              <strong id="manual-throttle-value" class="control-value">0.00</strong>
+            </div>
+            <div class="throttle-wrap">
+              <canvas id="manual-throttle" width="180" height="420" role="slider" aria-label="Throttle column" aria-valuemin="0" aria-valuemax="1" aria-valuenow="0" tabindex="0"></canvas>
+            </div>
+            <div class="magnitude-bar throttle-bar" aria-hidden="true">
+              <i class="bar-fill bar-up" style="--fill:0"></i>
+            </div>
+            <div class="control-readouts">
+              <span title="What you're asking the throttle to do (0..1)">Intent <b id="manual-throttle-input">0.00</b></span>
+              <span title="What's actually applied right now after the safety ramp-up (0..1)">Applied <b id="manual-throttle-output">0.00</b></span>
+              <span title="Throttle ramp-up rate. With Ramp 4.00/s, going from 0 to full throttle takes ~0.25 s. Cuts are instant.">Ramp <b id="manual-throttle-slew">--</b></span>
+            </div>
+          </article>
+
+          <div class="comms-overlay" hidden>
+            <div class="comms-message">
+              <strong>Comms lost</strong>
+              <span>Controls locked. Reconnecting...</span>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section id="overview" class="view" aria-label="Overview">
         <section class="cockpit">
           <article class="panel radar-primary" data-health="waiting">
             <div class="panel-head">
@@ -254,6 +331,6 @@
       </section>
     </main>
 
-    <script src="app.js?v=light-hud-2"></script>
+    <script src="app.js?v=control-v9"></script>
   </body>
 </html>

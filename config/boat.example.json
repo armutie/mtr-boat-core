@@ -23,7 +23,8 @@
     "forward_max_us": 1550,
     "hard_min_us": 1350,
     "hard_max_us": 2000,
-    "steering_slowdown": 0.35
+    "steering_slowdown": 0.35,
+    "differential": true
   },
   "ramp": {
     "start_us": 1505,
@@ -33,7 +34,9 @@
     "neutral_hold_s": 5.0
   },
   "runtime": {
-    "send_hz": 5.0,
-    "stale_timeout_s": 1.0
+    "send_hz": 20.0,
+    "snapshot_hz": 30.0,
+    "stale_timeout_s": 1.0,
+    "manual_slew_per_s": 4.0
   }
 }

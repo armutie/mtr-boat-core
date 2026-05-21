@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import random
+import socket
 import sys
 import threading
 import time
@@ -20,6 +21,7 @@ if str(REPO_ROOT) not in sys.path:
 
 HOST = "0.0.0.0"
 PORT = 8080
+DASHBOARD_BUILD = "control-post-v1"
 LINUX_TTY_CANDIDATES = [f"/dev/ttyACM{i}" for i in range(3)] + [f"/dev/ttyUSB{i}" for i in range(3)]
 WINDOWS_COM_CANDIDATES = [f"COM{i}" for i in range(1, 13)]
 
@@ -89,6 +91,7 @@ def base_snapshot(mode: str, started_at: float, log_paths: dict[str, str]) -> di
             "uptime_s": round(now - started_at, 2),
             "logging": bool(log_paths),
             "log_paths": log_paths,
+            "build": DASHBOARD_BUILD,
         },
         "health": {
             "mmwave": "unavailable",
@@ -654,16 +657,34 @@ class LiveImuReader:
 
 
 class DashboardState:
-    def __init__(self, mmwave_state, gnss_reader: LiveGnssReader | None, imu_reader: LiveImuReader | None, log_paths: dict[str, str]):
+    def __init__(
+        self,
+        mmwave_state,
+        gnss_reader: "LiveGnssReader | None",
+        imu_reader: "LiveImuReader | None",
+        log_paths: dict[str, str],
+        manual_slew_per_s: float = 0.0,
+    ):
         self.mmwave_state = mmwave_state
         self.gnss_reader = gnss_reader
         self.imu_reader = imu_reader
         self.log_paths = log_paths
+        self.control = ControlState(
+            manual_slew_per_s=manual_slew_per_s,
+        )
+        self.actuator: "ActuatorBridge | None" = None
 
     def snapshot(self) -> dict:
         snapshot = self.mmwave_state.snapshot()
         snapshot["session"]["log_paths"] = self.log_paths
         snapshot["session"]["logging"] = bool(self.log_paths)
+        snapshot["manual_control"] = self.control.snapshot()
+        if self.actuator is not None:
+            snapshot["manual_control"]["actuator"] = self.actuator.status_label()
+            snapshot["manual_control"]["effective"] = self.actuator.effective_output()
+        else:
+            snapshot["manual_control"]["actuator"] = "dry-run"
+            snapshot["manual_control"]["effective"] = None
         if self.gnss_reader is not None:
             health, gnss = self.gnss_reader.snapshot()
             snapshot["health"]["gnss"] = health
@@ -675,10 +696,424 @@ class DashboardState:
         return snapshot
 
 
+VALID_MODES = ("off", "manual", "auto")
+
+
+class ControlInputError(ValueError):
+    pass
+
+
+class ControlState:
+    """Tracks the operator intent: drive mode and (when in manual) the latest
+    throttle/steering payload from the browser.
+
+    Acts as the single source of truth for the actuator bridge to read from.
+    Has no knowledge of the actuator itself - it just records intent and a
+    timestamp. Staleness, slew, and PWM mapping happen downstream.
+    """
+
+    def __init__(
+        self,
+        stale_after_s: float = 0.45,
+        manual_slew_per_s: float = 0.0,
+    ) -> None:
+        self.stale_after_s = stale_after_s
+        self.manual_slew_per_s = max(0.0, manual_slew_per_s)
+        self._lock = threading.Lock()
+        self.mode = "off"
+        self.throttle = 0.0
+        self.steering = 0.0
+        self.last_update_at: float | None = None
+        self.reason = "off"
+
+    @staticmethod
+    def _coerce_float(value, name: str, default: float) -> float:
+        if value is None:
+            return default
+        try:
+            return float(value)
+        except (TypeError, ValueError) as exc:
+            raise ControlInputError(f"{name} must be a number") from exc
+
+    def apply(self, payload: dict) -> dict:
+        if not isinstance(payload, dict):
+            raise ControlInputError("payload must be a JSON object")
+
+        with self._lock:
+            current_mode = self.mode
+            current_enabled = current_mode == "manual"
+            current_throttle = self.throttle
+            current_steering = self.steering
+
+        if "enabled" in payload:
+            try:
+                enabled = bool(payload["enabled"])
+            except (TypeError, ValueError) as exc:
+                raise ControlInputError("enabled must be boolean") from exc
+        else:
+            enabled = current_enabled
+
+        throttle = self._coerce_float(payload.get("throttle"), "throttle", current_throttle)
+        steering = self._coerce_float(payload.get("steering"), "steering", current_steering)
+
+        throttle = max(0.0, min(1.0, throttle))
+        steering = max(-1.0, min(1.0, steering))
+
+        with self._lock:
+            # /api/control/manual is throttle/steering-only. It cannot enter
+            # manual mode (use /api/control/mode for that) so a stale heartbeat
+            # racing after set_mode("off") can never re-arm the boat. It can
+            # still cooperatively disarm by sending enabled=false.
+            if not enabled and self.mode == "manual":
+                self.mode = "off"
+                self.throttle = 0.0
+                self.steering = 0.0
+                self.reason = "manual disabled"
+            elif self.mode == "manual" and enabled:
+                self.throttle = throttle
+                self.steering = steering
+                self.reason = "manual command"
+            else:
+                self.throttle = 0.0
+                self.steering = 0.0
+                if self.mode == "off":
+                    self.reason = "off"
+                elif self.mode == "auto":
+                    self.reason = "auto not implemented"
+            self.last_update_at = time.time()
+        return self.snapshot()
+
+    def set_mode(self, mode: str) -> dict:
+        if mode not in VALID_MODES:
+            raise ControlInputError(f"mode must be one of {VALID_MODES}")
+        with self._lock:
+            self.mode = mode
+            if mode != "manual":
+                self.throttle = 0.0
+                self.steering = 0.0
+            self.last_update_at = time.time()
+            if mode == "off":
+                self.reason = "off"
+            elif mode == "manual":
+                self.reason = "manual armed"
+            else:
+                self.reason = "auto not implemented"
+        return self.snapshot()
+
+    def stop(self) -> dict:
+        with self._lock:
+            self.mode = "off"
+            self.throttle = 0.0
+            self.steering = 0.0
+            self.last_update_at = time.time()
+            self.reason = "operator stop"
+        return self.snapshot()
+
+    def command_snapshot(self) -> dict:
+        """Return the actuator-bound intent as a plain dict.
+
+        Used by the actuator bridge on its own clock; does not include UI
+        chrome. ``stale`` is True when manual mode hasn't received a fresh
+        payload within ``stale_after_s``.
+        """
+
+        now = time.time()
+        with self._lock:
+            mode = self.mode
+            throttle = self.throttle
+            steering = self.steering
+            last_update_at = self.last_update_at
+            reason = self.reason
+
+        if mode == "manual":
+            stale = last_update_at is None or now - last_update_at > self.stale_after_s
+            if stale:
+                return {
+                    "mode": mode,
+                    "source": "manual",
+                    "stale": True,
+                    "throttle": 0.0,
+                    "steering": 0.0,
+                    "reason": "manual stale; neutral output",
+                }
+            return {
+                "mode": mode,
+                "source": "manual",
+                "stale": False,
+                "throttle": throttle,
+                "steering": steering,
+                "reason": reason,
+            }
+        if mode == "auto":
+            return {
+                "mode": mode,
+                "source": "auto",
+                "stale": False,
+                "throttle": 0.0,
+                "steering": 0.0,
+                "reason": "auto not implemented",
+            }
+        return {
+            "mode": mode,
+            "source": "off",
+            "stale": False,
+            "throttle": 0.0,
+            "steering": 0.0,
+            "reason": reason or "off",
+        }
+
+    def snapshot(self) -> dict:
+        now = time.time()
+        with self._lock:
+            mode = self.mode
+            throttle = self.throttle
+            steering = self.steering
+            last_update_at = self.last_update_at
+            reason = self.reason
+            stale_after_s = self.stale_after_s
+            manual_slew_per_s = self.manual_slew_per_s
+
+        age_s = None if last_update_at is None else round(now - last_update_at, 3)
+        stale = mode == "manual" and (last_update_at is None or now - last_update_at > stale_after_s)
+        enabled = mode == "manual"
+        effective_throttle = 0.0 if stale or not enabled else throttle
+        effective_steering = 0.0 if stale or not enabled else steering
+        left = max(0.0, min(1.0, effective_throttle * (1.0 + effective_steering)))
+        right = max(0.0, min(1.0, effective_throttle * (1.0 - effective_steering)))
+
+        if stale:
+            reason = "manual command stale; neutral output"
+
+        return {
+            "enabled": enabled,
+            "mode": mode,
+            "stale": stale,
+            "age_s": age_s,
+            "input": {"throttle": throttle, "steering": steering},
+            "output": {
+                "throttle": effective_throttle,
+                "steering": effective_steering,
+                "left_thruster": left,
+                "right_thruster": right,
+            },
+            "limits": {
+                "manual_slew_per_s": manual_slew_per_s,
+                "stale_after_s": stale_after_s,
+            },
+            "reason": reason,
+        }
+
+
+# Backwards-compatibility alias for any external imports / tooling.
+ManualControlState = ControlState
+
+
+class ActuatorBridge:
+    """Fixed-rate actuator writer. Reads operator intent from a ControlState,
+    applies slew, maps to a left/right PWM pair, and writes to the ESP32 (or
+    prints a [DRY] line in dry-run mode). Has its own staleness watchdog.
+
+    Always logs issued commands to a JSONL file: one record per change, plus
+    a 1 Hz heartbeat so the disk file always has recent activity.
+    """
+
+    def __init__(
+        self,
+        control_state: ControlState,
+        mapping,
+        send_hz: float = 20.0,
+        slew_per_s: float = 1.5,
+        log_path=None,
+        serial_writer=None,
+        dry_run: bool = True,
+    ) -> None:
+        from thruster_control import manual_to_pair as _map
+
+        self._map = _map
+        self.control_state = control_state
+        self.mapping = mapping
+        self.send_hz = max(1.0, send_hz)
+        self.slew_per_s = max(0.0, slew_per_s)
+        self.serial_writer = serial_writer
+        self.dry_run = dry_run
+        self._log: JsonlLog | None = None
+        if log_path is not None:
+            try:
+                self._log = JsonlLog(log_path)
+            except Exception:
+                self._log = None
+        self._lock = threading.Lock()
+        self._last_throttle = 0.0
+        self._last_steering = 0.0
+        self._last_pair = (mapping.neutral_us, mapping.neutral_us)
+        self._last_send_at: float | None = None
+        self._last_log_at = 0.0
+        self._actuator_label = "dry-run" if dry_run or serial_writer is None else "live"
+        self._error: str | None = None
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True, name="actuator-bridge")
+
+    @property
+    def log_path(self) -> str | None:
+        return str(self._log.path) if self._log is not None else None
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def shutdown(self) -> None:
+        self._stop_event.set()
+        if self.serial_writer is not None and not self.dry_run:
+            try:
+                self.serial_writer.stop()
+                self.serial_writer.close()
+            except Exception:
+                pass
+        if self._log is not None:
+            try:
+                self._log.close()
+            except Exception:
+                pass
+
+    def status_label(self) -> str:
+        with self._lock:
+            return self._actuator_label
+
+    def effective_output(self) -> dict:
+        with self._lock:
+            return {
+                "throttle": round(self._last_throttle, 4),
+                "steering": round(self._last_steering, 4),
+                "left_us": int(self._last_pair[0]),
+                "right_us": int(self._last_pair[1]),
+                "last_send_age_s": None if self._last_send_at is None else round(time.time() - self._last_send_at, 3),
+                "send_hz": self.send_hz,
+                "slew_per_s": self.slew_per_s,
+                "error": self._error,
+            }
+
+    def _slew_throttle(self, current: float, target: float, dt: float) -> float:
+        """Asymmetric slew: ramp up gently, snap down for safety."""
+        if self.slew_per_s <= 0 or target <= current:
+            return target
+        return min(target, current + self.slew_per_s * dt)
+
+    def _emit(self, intent: dict, throttle: float, steering: float, pair_us: tuple[int, int], sent: bool) -> None:
+        now = time.time()
+        with self._lock:
+            changed = (
+                pair_us != self._last_pair
+                or abs(throttle - self._last_throttle) > 0.01
+                or abs(steering - self._last_steering) > 0.01
+            )
+            self._last_throttle = throttle
+            self._last_steering = steering
+            self._last_pair = pair_us
+            if sent:
+                self._last_send_at = now
+            heartbeat_due = now - self._last_log_at >= 1.0
+
+        if self._log is not None and (changed or heartbeat_due):
+            self._log.write({
+                "ts": round(now, 3),
+                "mode": intent.get("mode"),
+                "source": intent.get("source"),
+                "stale": intent.get("stale", False),
+                "intent_throttle": round(float(intent.get("throttle", 0.0)), 4),
+                "intent_steering": round(float(intent.get("steering", 0.0)), 4),
+                "throttle": round(throttle, 4),
+                "steering": round(steering, 4),
+                "left_us": int(pair_us[0]),
+                "right_us": int(pair_us[1]),
+                "actuator": self._actuator_label,
+                "reason": intent.get("reason", ""),
+            })
+            with self._lock:
+                self._last_log_at = now
+
+        if self.dry_run and changed:
+            print(
+                f"[DRY] PWM L{pair_us[0]} R{pair_us[1]} "
+                f"throttle={throttle:.2f} steering={steering:+.2f} "
+                f"mode={intent.get('mode')} src={intent.get('source')}"
+            )
+
+    def _run(self) -> None:
+        period = 1.0 / self.send_hz
+        last_tick = time.monotonic()
+
+        while not self._stop_event.is_set():
+            tick_start = time.monotonic()
+            dt = max(0.0, tick_start - last_tick)
+            last_tick = tick_start
+
+            intent = self.control_state.command_snapshot()
+            target_throttle = float(intent.get("throttle", 0.0))
+            target_steering = float(intent.get("steering", 0.0))
+
+            # When the upstream ControlState already reports stale, command_snapshot
+            # already returns neutral. We additionally guard against a wedged
+            # apply() loop: if the wall-clock age of the last apply is past
+            # 5x stale_after_s, force neutral regardless of mode.
+            with self.control_state._lock:  # noqa: SLF001 - intentional fast read
+                last_update = self.control_state.last_update_at
+                stale_after = self.control_state.stale_after_s
+            if last_update is not None and intent.get("mode") in ("manual", "auto"):
+                wall_age = time.time() - last_update
+                if wall_age > stale_after * 5:
+                    target_throttle = 0.0
+                    target_steering = 0.0
+
+            with self._lock:
+                last_throttle = self._last_throttle
+            new_throttle = self._slew_throttle(last_throttle, target_throttle, dt)
+            new_steering = target_steering
+
+            pair = self._map(
+                new_throttle,
+                new_steering,
+                self.mapping,
+                enabled=intent.get("mode") == "manual" and not intent.get("stale", False),
+            )
+            pair_us = (pair.left_us, pair.right_us)
+
+            sent = False
+            if self.dry_run or self.serial_writer is None:
+                sent = True
+                with self._lock:
+                    self._actuator_label = "dry-run"
+                    self._error = None
+            else:
+                try:
+                    self.serial_writer.send_pwm_pair(pair_us[0], pair_us[1])
+                    sent = True
+                    with self._lock:
+                        self._actuator_label = "live"
+                        self._error = None
+                except Exception as exc:
+                    with self._lock:
+                        self._actuator_label = "error"
+                        self._error = str(exc)
+
+            self._emit(intent, new_throttle, new_steering, pair_us, sent)
+
+            elapsed = time.monotonic() - tick_start
+            sleep_for = max(0.0, period - elapsed)
+            if self._stop_event.wait(sleep_for):
+                break
+
+
 STATE = DashboardState(UnavailableMmwaveState(time.time()), None, None, {})
 
 
+SNAPSHOT_HZ = 15.0
+
+
 class DashboardHandler(BaseHTTPRequestHandler):
+    # Use HTTP/1.1 so fetch() and EventSource can keep the TCP connection alive
+    # across many heartbeats. Without this we'd burn a fresh socket per POST,
+    # exhaust ephemeral ports on Windows, and pile up multi-second backpressure.
+    protocol_version = "HTTP/1.1"
+
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path == "/events":
@@ -703,15 +1138,60 @@ class DashboardHandler(BaseHTTPRequestHandler):
             content_type = "text/css"
         elif file_path.suffix == ".js":
             content_type = "application/javascript"
+        body = file_path.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", f"{content_type}; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(file_path.read_bytes())
+        self.wfile.write(body)
+
+    def do_POST(self) -> None:
+        path = urlparse(self.path).path
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        raw = self.rfile.read(length) if length > 0 else b"{}"
+        try:
+            payload = json.loads(raw.decode("utf-8") or "{}")
+        except json.JSONDecodeError:
+            self.write_json_error(400, "invalid JSON body")
+            return
+
+        try:
+            if path == "/api/control/manual":
+                self.write_json(STATE.control.apply(payload))
+                return
+            if path == "/api/control/stop":
+                self.write_json(STATE.control.stop())
+                return
+            if path == "/api/control/mode":
+                mode = payload.get("mode") if isinstance(payload, dict) else None
+                if not isinstance(mode, str):
+                    raise ControlInputError("mode must be a string")
+                self.write_json(STATE.control.set_mode(mode))
+                return
+        except ControlInputError as exc:
+            self.write_json_error(400, str(exc))
+            return
+        except Exception as exc:  # pragma: no cover - defensive
+            self.write_json_error(500, f"control error: {exc}")
+            return
+        self.send_error(404)
 
     def write_json(self, payload: dict) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def write_json_error(self, status: int, message: str) -> None:
+        body = json.dumps({"error": message}).encode("utf-8")
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
@@ -724,6 +1204,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "keep-alive")
         self.end_headers()
+        period = 1.0 / max(1.0, SNAPSHOT_HZ)
         while True:
             payload = json.dumps(STATE.snapshot(), separators=(",", ":"))
             try:
@@ -731,7 +1212,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
                 break
-            time.sleep(0.25)
+            time.sleep(period)
 
     def log_message(self, fmt: str, *args) -> None:
         return
@@ -775,8 +1256,9 @@ def _log_path(name: str) -> Path:
 
 
 def main() -> None:
-    global STATE
+    global STATE, SNAPSHOT_HZ
     from boat_core.config import choose, load_boat_config, section
+    from thruster_control import Esp32ThrusterSerial, ThrusterMapping
 
     started_at = time.time()
     parser = argparse.ArgumentParser(description="MTR realtime sensor dashboard")
@@ -803,12 +1285,22 @@ def main() -> None:
     parser.add_argument("--imu-address", help="IMU I2C address")
     parser.add_argument("--imu-calibration-samples", type=int, default=200)
     parser.add_argument("--log", action="store_true", help="Write live GNSS/IMU JSONL logs")
+    parser.add_argument("--esp32-port", help="ESP32 thruster serial port (e.g. COM3 or /dev/ttyACM0)")
+    parser.add_argument("--esp32-baud", type=int, help="ESP32 serial baud")
+    parser.add_argument("--actuator-dry-run", action="store_true", help="Force dry-run mode for the actuator bridge")
+    parser.add_argument("--actuator-live", action="store_true", help="Force live mode (require ESP32 port to open)")
+    parser.add_argument("--snapshot-hz", type=float, help="SSE telemetry rate (Hz, default 15)")
+    parser.add_argument("--send-hz", type=float, help="Actuator command send rate (Hz, default 20)")
+    parser.add_argument("--manual-slew-per-s", type=float, help="Per-axis slew limit (units/s, default 4.0)")
     args = parser.parse_args()
 
     config = load_boat_config(args.config)
     radar_config = section(config, "radar")
     gnss_config = section(config, "gnss")
     imu_config = section(config, "imu")
+    esp32_config = section(config, "esp32")
+    thruster_config = section(config, "thruster")
+    runtime_config = section(config, "runtime")
     cfg_port = choose(args.cfg_port, radar_config, "cfg_port")
     cfg_file = choose(args.cfg_file, radar_config, "cfg_file")
     data_port = choose(args.data_port, radar_config, "data_port")
@@ -817,6 +1309,15 @@ def main() -> None:
     gnss_baud = choose(args.gnss_baud, gnss_config, "baud", 38400)
     imu_bus = choose(args.imu_bus, imu_config, "bus", 2)
     imu_address = _parse_address(choose(args.imu_address, imu_config, "address", "0x68"))
+    esp32_port = choose(args.esp32_port, esp32_config, "port")
+    esp32_baud = choose(args.esp32_baud, esp32_config, "baud", 115200)
+
+    snapshot_hz = float(choose(args.snapshot_hz, runtime_config, "snapshot_hz", 30.0))
+    send_hz = float(choose(args.send_hz, runtime_config, "send_hz", 20.0))
+    manual_slew_per_s = float(choose(args.manual_slew_per_s, runtime_config, "manual_slew_per_s", 4.0))
+
+    SNAPSHOT_HZ = max(1.0, snapshot_hz)
+
     auto_direct_mmwave = (
         not args.demo
         and not args.ros
@@ -838,6 +1339,9 @@ def main() -> None:
     modes = [args.demo, args.ros, use_direct_mmwave]
     if sum(1 for enabled in modes if enabled) > 1:
         parser.error("--demo, --ros, and direct mmWave mode are mutually exclusive")
+
+    if args.actuator_dry_run and args.actuator_live:
+        parser.error("--actuator-dry-run and --actuator-live are mutually exclusive")
 
     if args.demo:
         mmwave_state = DemoSensorState(started_at)
@@ -881,9 +1385,71 @@ def main() -> None:
             log_paths["imu"] = str(imu_log.path)
         imu_reader = LiveImuReader(imu_bus, imu_address, imu_log, calibration_samples=args.imu_calibration_samples)
 
-    STATE = DashboardState(mmwave_state, gnss_reader, imu_reader, log_paths)
+    STATE = DashboardState(
+        mmwave_state,
+        gnss_reader,
+        imu_reader,
+        log_paths,
+        manual_slew_per_s=manual_slew_per_s,
+    )
 
-    server = ThreadingHTTPServer((args.host, args.port), DashboardHandler)
+    mapping = ThrusterMapping(
+        neutral_us=int(thruster_config.get("neutral_us", 1500)),
+        forward_min_us=int(thruster_config.get("forward_min_us", 1520)),
+        forward_max_us=int(thruster_config.get("forward_max_us", 1600)),
+        hard_min_us=int(thruster_config.get("hard_min_us", 1350)),
+        hard_max_us=int(thruster_config.get("hard_max_us", 2000)),
+        steering_slowdown=float(thruster_config.get("steering_slowdown", 0.35)),
+    )
+
+    esp32_serial = None
+    actuator_dry_run = True
+    actuator_status_msg = "dry-run (no ESP32 port configured)"
+    esp32_present = bool(esp32_port) and _serial_device_present(
+        esp32_port, _platform_candidates([f"/dev/ttyACM{i}" for i in range(3)])
+    )
+    want_live = args.actuator_live or (esp32_present and not args.actuator_dry_run)
+    if want_live:
+        if not esp32_port:
+            parser.error("--esp32-port is required for --actuator-live unless set in config")
+        try:
+            esp32_serial = Esp32ThrusterSerial(esp32_port, baud=esp32_baud)
+            actuator_dry_run = False
+            actuator_status_msg = f"live ({esp32_port} @ {esp32_baud})"
+        except Exception as exc:
+            actuator_dry_run = True
+            actuator_status_msg = f"dry-run (ESP32 open failed: {exc})"
+            print(f"[ACTUATOR] {actuator_status_msg}")
+
+    actuator_log_path = _log_path("actuator")
+    actuator_bridge = ActuatorBridge(
+        STATE.control,
+        mapping=mapping,
+        send_hz=send_hz,
+        slew_per_s=manual_slew_per_s,
+        log_path=actuator_log_path,
+        serial_writer=esp32_serial,
+        dry_run=actuator_dry_run,
+    )
+    STATE.actuator = actuator_bridge
+    actuator_bridge.start()
+    if actuator_bridge.log_path is not None:
+        log_paths["actuator"] = actuator_bridge.log_path
+
+    class _LowLatencyServer(ThreadingHTTPServer):
+        # Disable Nagle on each accepted socket so 50-byte heartbeat POSTs
+        # round-trip in microseconds instead of being held up to 200ms.
+        daemon_threads = True
+
+        def process_request(self, request, client_address):  # type: ignore[override]
+            try:
+                request.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            except OSError:
+                pass
+            super().process_request(request, client_address)
+
+    server = _LowLatencyServer((args.host, args.port), DashboardHandler)
+    print(f"Dashboard build: {DASHBOARD_BUILD}")
     print(f"MTR dashboard: http://localhost:{args.port}")
     print(f"LAN dashboard: http://<orange-pi-or-laptop-ip>:{args.port}")
     if args.demo:
@@ -909,9 +1475,17 @@ def main() -> None:
         print(f"IMU: I2C bus {imu_bus}, address 0x{imu_address:02x}")
         if auto_imu and not args.imu:
             print("IMU auto-started from detected I2C device")
+    print(
+        f"Telemetry: snapshot {SNAPSHOT_HZ:.0f} Hz / send {send_hz:.0f} Hz / "
+        f"slew {manual_slew_per_s:.2f}/s"
+    )
+    print(f"Actuator: {actuator_status_msg}")
     if log_paths:
         print(f"Logging: {log_paths}")
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        actuator_bridge.shutdown()
 
 
 if __name__ == "__main__":

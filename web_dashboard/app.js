@@ -5,6 +5,25 @@ const state = {
   gnss: [],
   maxTrace: 190,
   maxTrack: 240,
+  control: {
+    mode: "off",
+    intent: { throttle: 0, steering: 0 },
+    wheelAngleDeg: 0,
+    wheelMaxDeg: 115,
+    springReturn: true,
+    activePointer: null,
+    lastPointerAngleDeg: 0,
+    activeThrottlePointer: null,
+    lastSentAt: 0,
+    serverReachable: true,
+    sse: { everConnected: false, lastEventAt: 0 },
+    stopRetry: null,
+    serverManual: null,
+    limits: { manual_slew_per_s: 0.0, stale_after_s: 0.45 },
+    actuatorErrorAt: 0,
+    pendingMode: null,
+    pendingModeExpires: 0,
+  },
 };
 
 const colors = {
@@ -35,6 +54,286 @@ tabs.forEach((tab) => {
     requestAnimationFrame(() => drawAll(state.last));
   });
 });
+
+const wheelCanvas = document.getElementById("manual-wheel");
+const throttleCanvas = document.getElementById("manual-throttle");
+const stopButton = document.getElementById("manual-stop");
+const springToggle = document.getElementById("manual-spring-toggle");
+const modePills = Array.from(document.querySelectorAll(".mode-pill"));
+const controlSurface = document.querySelector(".control-surface");
+
+// Cache the high-traffic readout nodes so per-pointermove updates don't pay
+// for a querySelector on every event.
+const readoutNodes = {
+  steerValue: document.getElementById("manual-steering-value"),
+  throttleValue: document.getElementById("manual-throttle-value"),
+  throttleInput: document.getElementById("manual-throttle-input"),
+  leftIntent: document.getElementById("manual-left-intent"),
+  rightIntent: document.getElementById("manual-right-intent"),
+  steerBarLeft: document.querySelector(".steer-bar .bar-left"),
+  steerBarRight: document.querySelector(".steer-bar .bar-right"),
+  throttleBarUp: document.querySelector(".throttle-bar .bar-up"),
+};
+
+// Coalesce intent-driven redraws + DOM updates so that even at 300+ Hz
+// pointermove the work runs at most once per animation frame (~60 Hz).
+// Without this, heavy pointermove handlers starve setInterval and SSE
+// callbacks, causing the visible "Applied catches up after release" bug.
+let localRenderQueued = false;
+function scheduleLocalRender() {
+  if (localRenderQueued) return;
+  localRenderQueued = true;
+  requestAnimationFrame(() => {
+    localRenderQueued = false;
+    drawWheel();
+    drawThrottle();
+    renderLocalManualIntent();
+  });
+}
+
+function isControlEnabled() {
+  return state.control.mode === "manual" && state.control.serverReachable;
+}
+
+function bindManualControls() {
+  if (wheelCanvas) {
+    wheelCanvas.addEventListener("pointerdown", onWheelPointerDown);
+    wheelCanvas.addEventListener("pointermove", onWheelPointerMove);
+    wheelCanvas.addEventListener("pointerup", onWheelPointerEnd);
+    wheelCanvas.addEventListener("pointercancel", onWheelPointerEnd);
+    wheelCanvas.addEventListener("lostpointercapture", onWheelPointerEnd);
+    wheelCanvas.addEventListener("keydown", onWheelKeyDown);
+  }
+  if (throttleCanvas) {
+    throttleCanvas.addEventListener("pointerdown", onThrottlePointerDown);
+    throttleCanvas.addEventListener("pointermove", onThrottlePointerMove);
+    throttleCanvas.addEventListener("pointerup", onThrottlePointerEnd);
+    throttleCanvas.addEventListener("pointercancel", onThrottlePointerEnd);
+    throttleCanvas.addEventListener("lostpointercapture", onThrottlePointerEnd);
+    throttleCanvas.addEventListener("keydown", onThrottleKeyDown);
+    throttleCanvas.addEventListener("wheel", onThrottleWheel, { passive: false });
+  }
+  stopButton?.addEventListener("click", () => stopManualCommand());
+  springToggle?.addEventListener("click", () => {
+    state.control.springReturn = !state.control.springReturn;
+    springToggle.setAttribute("aria-pressed", state.control.springReturn ? "true" : "false");
+    springToggle.textContent = `Spring return: ${state.control.springReturn ? "on" : "off"}`;
+  });
+  modePills.forEach((pill) => {
+    pill.addEventListener("click", () => requestModeChange(pill.dataset.mode));
+  });
+  document.addEventListener("keydown", onGlobalKeyDown);
+  renderLocalManualIntent();
+  drawWheel();
+  drawThrottle();
+}
+
+function pointerAngleDeg(canvas, evt) {
+  const rect = canvas.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  return (Math.atan2(evt.clientY - cy, evt.clientX - cx) * 180) / Math.PI;
+}
+
+function onWheelPointerDown(evt) {
+  if (!isControlEnabled()) return;
+  evt.preventDefault();
+  wheelCanvas.setPointerCapture(evt.pointerId);
+  state.control.activePointer = evt.pointerId;
+  state.control.lastPointerAngleDeg = pointerAngleDeg(wheelCanvas, evt);
+}
+
+function onWheelPointerMove(evt) {
+  if (state.control.activePointer !== evt.pointerId) return;
+  evt.preventDefault();
+  const angle = pointerAngleDeg(wheelCanvas, evt);
+  // Incremental rotation: delta is computed against the previous frame, not
+  // the original grab angle. This means each step is a small angular nudge
+  // even when the cursor crosses the ±180° branch behind the wheel, which
+  // prevents the "drag through the bottom of the wheel and snap to the
+  // opposite lock" behaviour. Once the wheel is at ±wheelMaxDeg the clamp
+  // holds; to come back you have to drag the cursor the other way.
+  let delta = angle - state.control.lastPointerAngleDeg;
+  if (delta > 180) delta -= 360;
+  if (delta < -180) delta += 360;
+  state.control.lastPointerAngleDeg = angle;
+  const target = state.control.wheelAngleDeg + delta;
+  setWheelAngle(target);
+}
+
+function onWheelPointerEnd(evt) {
+  if (state.control.activePointer !== evt.pointerId) return;
+  state.control.activePointer = null;
+  try {
+    wheelCanvas.releasePointerCapture(evt.pointerId);
+  } catch (_) {}
+  if (state.control.springReturn) {
+    animateWheelTo(0);
+  }
+}
+
+function onWheelKeyDown(evt) {
+  if (!isControlEnabled()) return;
+  const step = evt.shiftKey ? 12 : 4;
+  if (evt.key === "ArrowLeft") {
+    evt.preventDefault();
+    setWheelAngle(state.control.wheelAngleDeg - step);
+  } else if (evt.key === "ArrowRight") {
+    evt.preventDefault();
+    setWheelAngle(state.control.wheelAngleDeg + step);
+  } else if (evt.key === "Home" || evt.key === "0") {
+    evt.preventDefault();
+    setWheelAngle(0);
+  }
+}
+
+function setWheelAngle(angleDeg) {
+  state.control.wheelAngleDeg = clamp(angleDeg, -state.control.wheelMaxDeg, state.control.wheelMaxDeg);
+  state.control.intent.steering = state.control.wheelAngleDeg / state.control.wheelMaxDeg;
+  wheelCanvas?.setAttribute("aria-valuenow", state.control.intent.steering.toFixed(2));
+  scheduleLocalRender();
+}
+
+function animateWheelTo(target) {
+  const start = state.control.wheelAngleDeg;
+  const t0 = performance.now();
+  const duration = 220;
+  function step(now) {
+    if (state.control.activePointer !== null) return;
+    const t = Math.min(1, (now - t0) / duration);
+    const ease = 1 - Math.pow(1 - t, 3);
+    setWheelAngle(start + (target - start) * ease);
+    if (t < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+function throttleFromPointer(canvas, evt) {
+  const rect = canvas.getBoundingClientRect();
+  const padding = 14;
+  const trackTop = rect.top + padding;
+  const trackBottom = rect.bottom - padding;
+  const y = evt.clientY;
+  const clamped = Math.max(trackTop, Math.min(trackBottom, y));
+  return clamp(1 - (clamped - trackTop) / (trackBottom - trackTop), 0, 1);
+}
+
+function onThrottlePointerDown(evt) {
+  if (!isControlEnabled()) return;
+  evt.preventDefault();
+  throttleCanvas.setPointerCapture(evt.pointerId);
+  state.control.activeThrottlePointer = evt.pointerId;
+  setThrottleIntent(throttleFromPointer(throttleCanvas, evt));
+}
+
+function onThrottlePointerMove(evt) {
+  if (state.control.activeThrottlePointer !== evt.pointerId) return;
+  evt.preventDefault();
+  setThrottleIntent(throttleFromPointer(throttleCanvas, evt));
+}
+
+function onThrottlePointerEnd(evt) {
+  if (state.control.activeThrottlePointer !== evt.pointerId) return;
+  state.control.activeThrottlePointer = null;
+  try {
+    throttleCanvas.releasePointerCapture(evt.pointerId);
+  } catch (_) {}
+}
+
+function onThrottleKeyDown(evt) {
+  if (!isControlEnabled()) return;
+  const step = evt.shiftKey ? 0.1 : 0.02;
+  if (evt.key === "ArrowUp") {
+    evt.preventDefault();
+    setThrottleIntent(state.control.intent.throttle + step);
+  } else if (evt.key === "ArrowDown") {
+    evt.preventDefault();
+    setThrottleIntent(state.control.intent.throttle - step);
+  } else if (evt.key === "Home" || evt.key === "End" || evt.key === "0") {
+    evt.preventDefault();
+    setThrottleIntent(0);
+  }
+}
+
+function onThrottleWheel(evt) {
+  if (!isControlEnabled()) return;
+  evt.preventDefault();
+  const dir = evt.deltaY < 0 ? 1 : -1;
+  setThrottleIntent(state.control.intent.throttle + dir * 0.04);
+}
+
+function setThrottleIntent(value) {
+  state.control.intent.throttle = clamp(value, 0, 1);
+  throttleCanvas?.setAttribute("aria-valuenow", state.control.intent.throttle.toFixed(2));
+  scheduleLocalRender();
+}
+
+function onGlobalKeyDown(evt) {
+  const target = evt.target;
+  const tag = target?.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
+  if (evt.key === " " || evt.key === "Spacebar" || evt.key === "Escape") {
+    evt.preventDefault();
+    stopManualCommand();
+  }
+}
+
+function requestModeChange(mode) {
+  if (!mode || mode === state.control.mode) return;
+  if (mode !== "manual") {
+    resetIntent();
+  }
+  state.control.mode = mode;
+  state.control.pendingMode = mode;
+  state.control.pendingModeExpires = performance.now() + 1500;
+  syncModePills();
+  renderLocalManualIntent();
+  postJson("/api/control/mode", { mode })
+    .then(() => {
+      state.control.serverReachable = true;
+    })
+    .catch((error) => {
+      state.control.serverReachable = false;
+      state.control.pendingMode = null;
+      setReason(`mode change failed: ${error.message}`, "error");
+    });
+}
+
+function syncModePills() {
+  modePills.forEach((pill) => {
+    const active = pill.dataset.mode === state.control.mode;
+    pill.setAttribute("aria-checked", active ? "true" : "false");
+  });
+  controlSurface?.setAttribute("data-mode", state.control.mode);
+  const banner = $("#manual-banner");
+  if (banner) {
+    if (state.control.mode === "auto") {
+      banner.hidden = false;
+      banner.dataset.tone = "warn";
+      banner.textContent = "Auto mode is a stub. Waypoints not yet implemented; output stays neutral.";
+    } else {
+      banner.hidden = true;
+      banner.removeAttribute("data-tone");
+      banner.textContent = "";
+    }
+  }
+}
+
+function resetIntent() {
+  state.control.intent.throttle = 0;
+  state.control.intent.steering = 0;
+  state.control.wheelAngleDeg = 0;
+  drawWheel();
+  drawThrottle();
+}
+
+function setReason(message, tone) {
+  text("#manual-reason", message);
+  const reasonEl = $("#manual-reason");
+  if (!reasonEl) return;
+  if (tone) reasonEl.dataset.tone = tone;
+  else reasonEl.removeAttribute("data-tone");
+}
 
 function $(selector) {
   return document.querySelector(selector);
@@ -109,6 +408,124 @@ function average(values) {
   return nums.reduce((sum, value) => sum + value, 0) / nums.length;
 }
 
+function signed(value) {
+  const n = num(value) ?? 0;
+  return `${n >= 0 ? "+" : ""}${n.toFixed(2)}`;
+}
+
+function manualMix(throttle, steering) {
+  const t = clamp(throttle, 0, 1);
+  const s = clamp(steering, -1, 1);
+  return {
+    left: clamp(t * (1 + s), 0, 1),
+    right: clamp(t * (1 - s), 0, 1),
+  };
+}
+
+function renderLocalManualIntent() {
+  const intent = state.control.intent;
+  const mix = manualMix(intent.throttle, intent.steering);
+  if (readoutNodes.steerValue) readoutNodes.steerValue.textContent = signed(intent.steering);
+  if (readoutNodes.throttleValue) readoutNodes.throttleValue.textContent = fmt(intent.throttle, 2);
+  if (readoutNodes.throttleInput) readoutNodes.throttleInput.textContent = fmt(intent.throttle, 2);
+  if (readoutNodes.leftIntent) readoutNodes.leftIntent.textContent = fmt(mix.left, 2);
+  if (readoutNodes.rightIntent) readoutNodes.rightIntent.textContent = fmt(mix.right, 2);
+  setSteerBar(intent.steering);
+  setThrottleBar(intent.throttle);
+}
+
+function setSteerBar(value) {
+  const v = clamp(num(value) ?? 0, -1, 1);
+  const left = v < 0 ? -v : 0;
+  const right = v > 0 ? v : 0;
+  readoutNodes.steerBarLeft?.style.setProperty("--fill", left.toFixed(3));
+  readoutNodes.steerBarRight?.style.setProperty("--fill", right.toFixed(3));
+}
+
+function setThrottleBar(value) {
+  const v = clamp(num(value) ?? 0, 0, 1);
+  readoutNodes.throttleBarUp?.style.setProperty("--fill", v.toFixed(3));
+}
+
+async function postJson(path, payload = {}) {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    let detail = `${response.status} ${response.statusText}`;
+    try {
+      const body = await response.json();
+      if (body?.error) detail = body.error;
+    } catch (_) {}
+    throw new Error(detail);
+  }
+  return response.json();
+}
+
+function sendManualCommand(force = false) {
+  if (state.control.mode !== "manual") return;
+  const now = performance.now();
+  if (!force && now - state.control.lastSentAt < 45) return;
+  state.control.lastSentAt = now;
+  postJson("/api/control/manual", {
+    enabled: true,
+    throttle: state.control.intent.throttle,
+    steering: state.control.intent.steering,
+  })
+    .then(() => {
+      state.control.serverReachable = true;
+    })
+    .catch((error) => {
+      state.control.serverReachable = false;
+      setReason(`server command failed: ${error.message}`, "error");
+    });
+}
+
+function stopManualCommand() {
+  state.control.mode = "off";
+  state.control.pendingMode = "off";
+  state.control.pendingModeExpires = performance.now() + 2000;
+  resetIntent();
+  syncModePills();
+  renderLocalManualIntent();
+  if (stopButton) {
+    stopButton.dataset.pressed = "true";
+    setTimeout(() => stopButton.removeAttribute("data-pressed"), 700);
+  }
+  startStopRetry();
+}
+
+function startStopRetry() {
+  const retry = { startedAt: performance.now(), attempts: 0, acked: false };
+  state.control.stopRetry = retry;
+  function attempt() {
+    if (retry.acked) return;
+    if (state.control.stopRetry !== retry) return;
+    retry.attempts += 1;
+    postJson("/api/control/stop")
+      .then(() => {
+        retry.acked = true;
+        state.control.stopRetry = null;
+        state.control.serverReachable = true;
+        setReason("operator stop acknowledged", null);
+      })
+      .catch((error) => {
+        state.control.serverReachable = false;
+        const elapsed = performance.now() - retry.startedAt;
+        if (elapsed >= 1500) {
+          state.control.stopRetry = null;
+          setReason(`stop NOT acknowledged after retries: ${error.message}`, "error");
+          return;
+        }
+        setReason(`local stop only; retrying (${retry.attempts})...`, "warn");
+        setTimeout(attempt, 100);
+      });
+  }
+  attempt();
+}
+
 function updateHistory(data) {
   const throttle = num(data?.mmwave?.control?.throttle);
   const accel = num(data?.imu?.accel_mag_g);
@@ -135,6 +552,9 @@ function updateDom(data) {
   const mmwave = data.mmwave || {};
   const gnss = data.gnss || {};
   const imu = data.imu || {};
+  const manual = data.manual_control || {};
+  const manualOutput = manual.output || {};
+  const manualInput = manual.input || {};
   const control = mmwave.control || {};
   const counts = mmwave.point_count || {};
   const raw = mmwave.raw_points || [];
@@ -228,6 +648,90 @@ function updateDom(data) {
   setBar("#imu-gx-bar", imuHealth === "live" ? Math.abs(num(imu.gyro_x_dps) ?? 0) : null, 0, 120, "var(--cyan)");
   setBar("#imu-gy-bar", imuHealth === "live" ? Math.abs(num(imu.gyro_y_dps) ?? 0) : null, 0, 120, "var(--yellow)");
   setBar("#imu-gz-bar", imuHealth === "live" ? Math.abs(num(imu.gyro_z_dps) ?? 0) : null, 0, 120, "var(--orange)");
+
+  state.control.serverManual = manual;
+  if (manual.limits) {
+    state.control.limits = {
+      manual_slew_per_s: num(manual.limits.manual_slew_per_s) ?? state.control.limits.manual_slew_per_s,
+      stale_after_s: num(manual.limits.stale_after_s) ?? state.control.limits.stale_after_s,
+    };
+  }
+  if (manual.mode && state.control.pendingMode) {
+    if (manual.mode === state.control.pendingMode) {
+      state.control.pendingMode = null;
+    } else if (performance.now() > state.control.pendingModeExpires) {
+      state.control.pendingMode = null;
+    }
+  }
+  if (
+    manual.mode &&
+    state.control.pendingMode === null &&
+    state.control.activePointer === null &&
+    state.control.activeThrottlePointer === null &&
+    state.control.stopRetry === null
+  ) {
+    if (state.control.mode !== manual.mode) {
+      state.control.mode = manual.mode;
+      syncModePills();
+    }
+  }
+  const readoutMode = state.control.pendingMode || manual.mode || state.control.mode || "off";
+  text("#manual-mode", readoutMode);
+  text("#manual-actuator", typeof manual.actuator === "string" ? manual.actuator : (manual.actuator?.actuator || "dry-run"));
+  const effective = manual.effective || {};
+  text("#manual-pwm-left", fmtInt(effective.left_us));
+  text("#manual-pwm-right", fmtInt(effective.right_us));
+  text("#manual-throttle-slew", fmt(state.control.limits.manual_slew_per_s, 2, "/s"));
+  text("#manual-throttle-output", fmt(num(effective.throttle) ?? manualOutput.throttle, 2));
+  if (state.control.mode !== "manual") {
+    text("#manual-throttle-input", fmt(manualInput.throttle ?? 0, 2));
+  }
+  if (!state.control.stopRetry) {
+    setReason(manual.reason || "drive off", null);
+  }
+  updateStaleness(manual);
+  updateActuatorBanner(manual);
+}
+
+function updateStaleness(manual) {
+  const fillEl = $("#staleness-fill");
+  const labelEl = $("#staleness-label");
+  if (!fillEl || !labelEl) return;
+  const stale = manual?.stale === true;
+  const ageS = num(manual?.age_s);
+  const limit = state.control.limits.stale_after_s || 0.45;
+  if (state.control.mode !== "manual" || ageS === null) {
+    fillEl.style.setProperty("--fill", "0%");
+    labelEl.textContent = state.control.mode === "manual" ? "armed" : "--";
+    return;
+  }
+  if (stale) {
+    fillEl.style.setProperty("--fill", "100%");
+    labelEl.textContent = "stale";
+    return;
+  }
+  const remaining = Math.max(0, limit - ageS);
+  const pct = Math.max(0, Math.min(1, remaining / limit));
+  fillEl.style.setProperty("--fill", `${(pct * 100).toFixed(0)}%`);
+  labelEl.textContent = `${remaining.toFixed(2)}s`;
+}
+
+function updateActuatorBanner(manual) {
+  const banner = $("#manual-banner");
+  if (!banner) return;
+  const actuator = typeof manual?.actuator === "string" ? manual.actuator : null;
+  if (state.control.mode === "auto") {
+    return;
+  }
+  if (actuator === "error") {
+    banner.hidden = false;
+    banner.dataset.tone = "error";
+    banner.textContent = `Actuator error: ${manual?.effective?.error || "unknown"}`;
+  } else {
+    banner.hidden = true;
+    banner.removeAttribute("data-tone");
+    banner.textContent = "";
+  }
 }
 
 function setZone(selector, value) {
@@ -600,7 +1104,133 @@ function drawTrace(id, values, options = {}) {
   ctx.stroke();
 }
 
+function drawWheel() {
+  const surface = canvasContext("manual-wheel");
+  if (!surface) return;
+  const { ctx, w, h } = surface;
+  const cx = w / 2;
+  const cy = h / 2;
+  const r = Math.min(w, h) / 2 - 6;
+  const angleRad = (state.control.wheelAngleDeg * Math.PI) / 180;
+  const enabled = isControlEnabled();
+
+  ctx.fillStyle = colors.bg;
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(angleRad);
+
+  ctx.lineWidth = Math.max(10, r * 0.13);
+  ctx.strokeStyle = enabled ? colors.ink : colors.dead;
+  ctx.beginPath();
+  ctx.arc(0, 0, r - ctx.lineWidth / 2, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.fillStyle = enabled ? colors.yellow : "#e5d9b5";
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 0.32, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.lineWidth = Math.max(8, r * 0.085);
+  ctx.lineCap = "round";
+  ctx.strokeStyle = enabled ? colors.ink : colors.dead;
+  for (let i = 0; i < 3; i += 1) {
+    const a = (i * Math.PI * 2) / 3 - Math.PI / 2;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(Math.cos(a) * (r - 14), Math.sin(a) * (r - 14));
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = enabled ? colors.red : "#c89aa1";
+  const indW = r * 0.16;
+  const indH = r * 0.34;
+  roundedRect(ctx, -indW / 2, -r + 4, indW, indH, indW / 3);
+  ctx.fill();
+
+  ctx.fillStyle = enabled ? colors.ink : colors.dead;
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 0.12, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+
+  ctx.strokeStyle = colors.dead;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(cx - 6, cy + r + 4);
+  ctx.lineTo(cx + 6, cy + r + 4);
+  ctx.stroke();
+
+  drawLabel(ctx, `${state.control.wheelAngleDeg >= 0 ? "+" : ""}${state.control.wheelAngleDeg.toFixed(0)}°`, cx - 22, cy + r + 22, colors.muted, 12);
+}
+
+function roundedRect(ctx, x, y, w, h, r) {
+  const radius = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.lineTo(x + w - radius, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+  ctx.lineTo(x + w, y + h - radius);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+  ctx.lineTo(x + radius, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+  ctx.lineTo(x, y + radius);
+  ctx.quadraticCurveTo(x, y, x + radius, y);
+  ctx.closePath();
+}
+
+function drawThrottle() {
+  const surface = canvasContext("manual-throttle");
+  if (!surface) return;
+  const { ctx, w, h } = surface;
+  const padding = 14;
+  const trackTop = padding;
+  const trackBottom = h - padding;
+  const trackHeight = trackBottom - trackTop;
+  const trackLeft = padding;
+  const trackRight = w - padding;
+  const trackWidth = trackRight - trackLeft;
+  const intent = state.control.intent.throttle;
+  const enabled = isControlEnabled();
+
+  ctx.fillStyle = "#f7efd9";
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.strokeStyle = colors.dead;
+  ctx.lineWidth = 1;
+  for (const tick of [0.25, 0.5, 0.75]) {
+    const y = trackBottom - tick * trackHeight;
+    ctx.beginPath();
+    ctx.moveTo(trackLeft, y);
+    ctx.lineTo(trackRight, y);
+    ctx.stroke();
+    drawLabel(ctx, `${(tick * 100).toFixed(0)}`, trackLeft + 4, y - 4, colors.muted, 10);
+  }
+
+  const fillH = clamp(intent, 0, 1) * trackHeight;
+  const fillY = trackBottom - fillH;
+  const grad = ctx.createLinearGradient(0, trackBottom, 0, trackTop);
+  grad.addColorStop(0, enabled ? colors.green : "#bcd1ad");
+  grad.addColorStop(1, enabled ? colors.yellow : "#e6d5a8");
+  ctx.fillStyle = grad;
+  ctx.fillRect(trackLeft, fillY, trackWidth, fillH);
+
+  const thumbY = clamp(fillY, trackTop - 1, trackBottom + 1);
+  ctx.fillStyle = enabled ? colors.ink : colors.dead;
+  roundedRect(ctx, trackLeft - 2, thumbY - 9, trackWidth + 4, 14, 4);
+  ctx.fill();
+
+  ctx.fillStyle = "#fffdf4";
+  ctx.fillRect(trackLeft + 6, thumbY - 2, trackWidth - 12, 2);
+
+  drawLabel(ctx, fmt(intent, 2), trackLeft + 6, trackTop + 16, colors.muted, 11);
+}
+
 function drawAll(data) {
+  drawWheel();
+  drawThrottle();
   if (!data) return;
   drawRadar("radar-overview", data, false);
   drawRadar("radar-detail", data, true);
@@ -626,6 +1256,10 @@ function connectEvents() {
   events.onmessage = (event) => {
     try {
       applySnapshot(JSON.parse(event.data));
+      state.control.sse.everConnected = true;
+      state.control.sse.lastEventAt = performance.now();
+      state.control.serverReachable = true;
+      updateDegradedState();
     } catch (error) {
       console.error(error);
     }
@@ -634,7 +1268,27 @@ function connectEvents() {
     text("#stream-label", "stream offline");
     text("#stream-meta", "retrying");
     $(".stream-card")?.setAttribute("data-health", "error");
+    state.control.serverReachable = false;
+    updateDegradedState();
   };
+}
+
+function updateDegradedState() {
+  if (!controlSurface) return;
+  const reachable = state.control.serverReachable;
+  controlSurface.setAttribute("data-degraded", reachable ? "false" : "true");
+  const overlay = controlSurface.querySelector(".comms-overlay");
+  if (overlay) overlay.hidden = reachable;
+  if (!reachable && state.control.mode === "manual") {
+    setReason("comms lost - controls locked", "error");
+  }
+}
+
+function watchdogTick() {
+  if (state.control.sse.everConnected && performance.now() - state.control.sse.lastEventAt > 1500) {
+    state.control.serverReachable = false;
+    updateDegradedState();
+  }
 }
 
 fetch("/api/snapshot")
@@ -645,3 +1299,12 @@ fetch("/api/snapshot")
     $(".stream-card")?.setAttribute("data-health", "error");
   })
   .finally(connectEvents);
+
+bindManualControls();
+syncModePills();
+setInterval(() => sendManualCommand(false), 50);
+setInterval(watchdogTick, 500);
+window.addEventListener("resize", () => {
+  drawWheel();
+  drawThrottle();
+});
