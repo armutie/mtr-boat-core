@@ -49,7 +49,7 @@
     "level3_us": 1585,
     "heading_deadband_deg": 8.0,
     "yaw_rate_deadband_dps": 2.0,
-    "yaw_lookahead_s": 1.2,
+    "yaw_lookahead_s": 2.0,
     "pulse_turn_enter_deg": 18.0,
     "pulse_turn_exit_deg": 6.0,
     "pulse_reverse_deg": 38.0,

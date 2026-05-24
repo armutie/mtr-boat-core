@@ -1467,7 +1467,7 @@ def main() -> None:
         imu_stale_s=float(auto_config.get("imu_stale_s", 2.0)),
         heading_deadband_deg=float(auto_config.get("heading_deadband_deg", 8.0)),
         yaw_rate_deadband_dps=float(auto_config.get("yaw_rate_deadband_dps", 2.0)),
-        yaw_lookahead_s=float(auto_config.get("yaw_lookahead_s", 1.2)),
+        yaw_lookahead_s=float(auto_config.get("yaw_lookahead_s", 2.0)),
         pulse_turn_enter_deg=float(auto_config.get("pulse_turn_enter_deg", 18.0)),
         pulse_turn_exit_deg=float(auto_config.get("pulse_turn_exit_deg", 6.0)),
         pulse_reverse_deg=float(auto_config.get("pulse_reverse_deg", 38.0)),

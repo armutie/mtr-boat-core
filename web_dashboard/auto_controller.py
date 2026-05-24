@@ -19,7 +19,7 @@ class AutoConfig:
     imu_stale_s: float = 2.0
     heading_deadband_deg: float = 8.0
     yaw_rate_deadband_dps: float = 2.0
-    yaw_lookahead_s: float = 1.2
+    yaw_lookahead_s: float = 2.0
     pulse_turn_enter_deg: float = 18.0
     pulse_turn_exit_deg: float = 6.0
     pulse_reverse_deg: float = 38.0
