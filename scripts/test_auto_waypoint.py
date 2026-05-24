@@ -22,11 +22,12 @@ def main() -> None:
     parser.add_argument("log_path")
     parser.add_argument("--target-lat", type=float, required=True)
     parser.add_argument("--target-lon", type=float, required=True)
+    parser.add_argument("--controller", default="pulse_yaw_v1", choices=("guesstimate_rate_v1", "pulse_yaw_v1"))
     parser.add_argument("--max-rows", type=int, default=40)
     args = parser.parse_args()
 
     fixes = [fix for fix in load_gnss_log(args.log_path) if fix.lat is not None and fix.lon is not None]
-    controller = AutoController(_ControlState(), None, None, AutoConfig())
+    controller = AutoController(_ControlState(), None, None, AutoConfig(controller=args.controller))
     print("idx,distance_m,bearing_deg,heading_deg,speed_mps,error_deg,left_us,right_us,action,reached")
     emitted = 0
     for index, fix in enumerate(fixes):
@@ -37,7 +38,7 @@ def main() -> None:
         dist = distance_m(fix.lat, fix.lon, args.target_lat, args.target_lon)
         bearing = bearing_deg(fix.lat, fix.lon, args.target_lat, args.target_lon)
         error = heading_error_deg(fix.heading_deg, bearing)
-        control = controller._compute_guesstimate_control(  # noqa: SLF001 - smoke test intentionally probes live math
+        control = controller._compute_waypoint_control(  # noqa: SLF001 - smoke test intentionally probes live math
             dist,
             error,
             "unavailable",

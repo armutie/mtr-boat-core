@@ -1458,6 +1458,7 @@ def main() -> None:
         approach_slow_radius_m=float(auto_config.get("approach_slow_radius_m", 8.0)),
     )
     auto_runtime_cfg = AutoConfig(
+        controller=str(auto_config.get("controller", "pulse_yaw_v1")),
         control_hz=float(auto_config.get("control_hz", 10.0)),
         min_speed_for_course_mps=float(auto_config.get("min_speed_for_course_mps", 0.08)),
         gnss_reanchor_speed_mps=float(auto_config.get("gnss_reanchor_speed_mps", 0.3)),
@@ -1467,6 +1468,11 @@ def main() -> None:
         heading_deadband_deg=float(auto_config.get("heading_deadband_deg", 8.0)),
         yaw_rate_deadband_dps=float(auto_config.get("yaw_rate_deadband_dps", 2.0)),
         yaw_lookahead_s=float(auto_config.get("yaw_lookahead_s", 1.2)),
+        pulse_turn_enter_deg=float(auto_config.get("pulse_turn_enter_deg", 18.0)),
+        pulse_turn_exit_deg=float(auto_config.get("pulse_turn_exit_deg", 6.0)),
+        pulse_reverse_deg=float(auto_config.get("pulse_reverse_deg", 38.0)),
+        pulse_duration_s=float(auto_config.get("pulse_duration_s", 0.25)),
+        pulse_observe_s=float(auto_config.get("pulse_observe_s", 0.35)),
         neutral_us=int(thruster_config.get("neutral_us", 1500)),
         level1_us=int(auto_config.get("level1_us", thruster_config.get("forward_min_us", 1565))),
         level2_us=int(auto_config.get("level2_us", 1575)),

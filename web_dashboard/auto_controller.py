@@ -10,6 +10,7 @@ from radar_nav.waypoint import GeoWaypoint, WaypointControl, WaypointNavConfig
 
 @dataclass
 class AutoConfig:
+    controller: str = "pulse_yaw_v1"
     control_hz: float = 10.0
     min_speed_for_course_mps: float = 0.08
     gnss_reanchor_speed_mps: float = 0.3
@@ -19,6 +20,11 @@ class AutoConfig:
     heading_deadband_deg: float = 8.0
     yaw_rate_deadband_dps: float = 2.0
     yaw_lookahead_s: float = 1.2
+    pulse_turn_enter_deg: float = 18.0
+    pulse_turn_exit_deg: float = 6.0
+    pulse_reverse_deg: float = 38.0
+    pulse_duration_s: float = 0.25
+    pulse_observe_s: float = 0.35
     neutral_us: int = 1500
     level1_us: int = 1565
     level2_us: int = 1575
@@ -41,6 +47,10 @@ class AutoController:
         self._heading_anchor_imu_yaw_deg: float | None = None
         self._heading_source = "uninitialized"
         self._heading_confidence = "none"
+        self._pulse_action: str | None = None
+        self._pulse_until = 0.0
+        self._pulse_observe_until = 0.0
+        self._latched_turn: str | None = None
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
@@ -63,12 +73,14 @@ class AutoController:
             "bearing_deg": None,
             "heading_deg": None,
             "heading_error_deg": None,
+            "controller": self.config.controller,
             "control_hz": self.config.control_hz,
         }
         with self._lock:
             self._waypoints = waypoints
             self._active_index = 0
             self._status = status
+            self._clear_pulse_state()
         self.control_state.set_auto_status(self.status())
         return self.route_snapshot()
 
@@ -159,7 +171,7 @@ class AutoController:
             return
 
         error = heading_error_deg(heading, bearing)
-        control = self._compute_guesstimate_control(dist, error, imu_health, imu)
+        control = self._compute_waypoint_control(dist, error, imu_health, imu)
 
         if control.reached:
             with self._lock:
@@ -298,6 +310,11 @@ class AutoController:
         yaw_rate = float(yaw_rate)
         return 0.0 if abs(yaw_rate) < self.config.yaw_rate_deadband_dps else yaw_rate
 
+    def _compute_waypoint_control(self, dist: float, error: float, imu_health: str, imu: dict) -> WaypointControl:
+        if self.config.controller == "pulse_yaw_v1":
+            return self._compute_pulse_yaw_control(dist, error, imu_health, imu)
+        return self._compute_guesstimate_control(dist, error, imu_health, imu)
+
     def _compute_guesstimate_control(self, dist: float, error: float, imu_health: str, imu: dict) -> WaypointControl:
         reached = dist <= self.config.waypoint.reach_radius_m
         metadata = {
@@ -375,10 +392,121 @@ class AutoController:
             },
         )
 
+    def _compute_pulse_yaw_control(self, dist: float, error: float, imu_health: str, imu: dict) -> WaypointControl:
+        reached = dist <= self.config.waypoint.reach_radius_m
+        yaw_rate = self._valid_imu_yaw_rate(imu_health, imu)
+        predicted_error = error
+        if yaw_rate is not None:
+            predicted_error = heading_error_deg(yaw_rate * self.config.yaw_lookahead_s, error)
+
+        metadata = {
+            "controller": "pulse_yaw_v1",
+            "raw_heading_error_deg": round(error, 2),
+            "predicted_error_deg": round(predicted_error, 2),
+            "yaw_rate_dps": None if yaw_rate is None else round(yaw_rate, 2),
+            "imu_health": imu_health,
+            "latched_turn": self._latched_turn,
+        }
+        if reached:
+            self._clear_pulse_state()
+            return WaypointControl(
+                distance_m=dist,
+                heading_error_deg=error,
+                reached=True,
+                left_us=self.config.neutral_us,
+                right_us=self.config.neutral_us,
+                action="reached",
+                metadata={**metadata, "action": "reached"},
+            )
+
+        now = time.monotonic()
+        level = self._nav_level(dist, error, predicted_error)
+        abs_error = abs(error)
+        abs_predicted = abs(predicted_error)
+
+        if self._pulse_action is not None and now < self._pulse_until:
+            action = self._pulse_action
+            steering_reason = "committed turn pulse"
+        elif now < self._pulse_observe_until:
+            action = "observe"
+            steering_reason = "observing yaw after pulse"
+        else:
+            self._pulse_action = None
+            if abs_error <= self.config.pulse_turn_exit_deg or abs_predicted <= self.config.pulse_turn_exit_deg:
+                self._latched_turn = None
+                action = "forward"
+                steering_reason = "aligned"
+            else:
+                desired_turn = "arc_right" if predicted_error > 0 else "arc_left"
+                opposite_turn = "arc_left" if desired_turn == "arc_right" else "arc_right"
+                yaw_correcting = yaw_rate is not None and error * yaw_rate > 0
+                yaw_will_cover = yaw_correcting and abs(yaw_rate) * self.config.yaw_lookahead_s >= abs_error * 0.55
+
+                if yaw_will_cover:
+                    action = "observe"
+                    steering_reason = "yaw rate already carrying turn"
+                elif self._latched_turn == opposite_turn and abs_predicted < self.config.pulse_reverse_deg:
+                    action = "observe"
+                    steering_reason = "holding reversal until error is clear"
+                elif abs_predicted >= self.config.pulse_turn_enter_deg:
+                    action = desired_turn
+                    self._latched_turn = desired_turn
+                    self._pulse_action = action
+                    self._pulse_until = now + self.config.pulse_duration_s
+                    self._pulse_observe_until = self._pulse_until + self.config.pulse_observe_s
+                    steering_reason = "starting turn pulse"
+                elif self._latched_turn is not None and abs_predicted > self.config.pulse_turn_exit_deg:
+                    action = "observe"
+                    steering_reason = "between pulse thresholds"
+                else:
+                    self._latched_turn = None
+                    action = "forward"
+                    steering_reason = "near aligned"
+
+        left_us, right_us = self._action_to_pwm(action, level)
+        return WaypointControl(
+            distance_m=dist,
+            heading_error_deg=error,
+            reached=False,
+            left_us=left_us,
+            right_us=right_us,
+            action=action,
+            metadata={
+                **metadata,
+                "action": action,
+                "left_us": left_us,
+                "right_us": right_us,
+                "steering_reason": steering_reason,
+                "level": level,
+                "pulse_duration_s": self.config.pulse_duration_s,
+                "pulse_observe_s": self.config.pulse_observe_s,
+                "pulse_turn_enter_deg": self.config.pulse_turn_enter_deg,
+                "pulse_turn_exit_deg": self.config.pulse_turn_exit_deg,
+                "pulse_reverse_deg": self.config.pulse_reverse_deg,
+            },
+        )
+
+    def _nav_level(self, dist: float, error: float, predicted_error: float) -> int:
+        abs_error = abs(error)
+        abs_predicted = abs(predicted_error)
+        if dist <= self.config.waypoint.approach_slow_radius_m:
+            return 1
+        if abs_error > 55.0 or abs_predicted > 45.0:
+            return 1
+        return 2
+
+    def _clear_pulse_state(self) -> None:
+        self._pulse_action = None
+        self._pulse_until = 0.0
+        self._pulse_observe_until = 0.0
+        self._latched_turn = None
+
     def _action_to_pwm(self, action: str, level: int) -> tuple[int, int]:
         neutral = int(self.config.neutral_us)
         active = int(self.config.level2_us if level >= 2 else self.config.level1_us)
         if action == "coast":
+            return neutral, neutral
+        if action == "observe":
             return neutral, neutral
         if action.startswith("forward"):
             return active, active
@@ -406,6 +534,7 @@ class AutoController:
             "bearing_deg": None,
             "heading_deg": None,
             "heading_error_deg": None,
+            "controller": self.config.controller,
             "control_hz": self.config.control_hz,
         }
 
@@ -418,8 +547,8 @@ class AutoController:
         total: int,
         dist: float,
         bearing: float,
-        error: float,
-        heading: float,
+        error: float | None,
+        heading: float | None,
         control_metadata: dict | None = None,
     ) -> dict:
         return {
@@ -432,6 +561,7 @@ class AutoController:
             "bearing_deg": round(bearing, 1),
             "heading_deg": None if heading is None else round(heading, 1),
             "heading_error_deg": None if error is None else round(error, 1),
+            "controller": self.config.controller,
             "control": control_metadata or {},
             "control_hz": self.config.control_hz,
         }
