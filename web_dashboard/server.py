@@ -1476,7 +1476,7 @@ def main() -> None:
         neutral_us=int(thruster_config.get("neutral_us", 1500)),
         level1_us=int(auto_config.get("level1_us", thruster_config.get("forward_min_us", 1565))),
         level2_us=int(auto_config.get("level2_us", 1575)),
-        level3_us=int(auto_config.get("level3_us", 1585)),
+        level3_us=int(auto_config.get("level3_us", thruster_config.get("forward_max_us", 1650))),
         waypoint=waypoint_cfg,
     )
 

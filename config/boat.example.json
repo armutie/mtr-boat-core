@@ -46,7 +46,7 @@
     "approach_slow_radius_m": 8.0,
     "level1_us": 1565,
     "level2_us": 1575,
-    "level3_us": 1585,
+    "level3_us": 1650,
     "heading_deadband_deg": 8.0,
     "yaw_rate_deadband_dps": 2.0,
     "yaw_lookahead_s": 2.0,

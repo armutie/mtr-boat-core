@@ -28,7 +28,7 @@ class AutoConfig:
     neutral_us: int = 1500
     level1_us: int = 1565
     level2_us: int = 1575
-    level3_us: int = 1585
+    level3_us: int = 1650
     waypoint: WaypointNavConfig = field(default_factory=WaypointNavConfig)
 
 
@@ -361,7 +361,7 @@ class AutoController:
             level = 2
             throttle_reason = "moderate heading correction"
         else:
-            level = 2
+            level = 3
             throttle_reason = "tracking waypoint"
 
         # When we are already rotating quickly toward the target, do not add
@@ -500,7 +500,9 @@ class AutoController:
             return 1
         if abs_error > 55.0 or abs_predicted > 45.0:
             return 1
-        return 2
+        if abs_error > 22.0 or abs_predicted > 18.0:
+            return 2
+        return 3
 
     def _clear_pulse_state(self) -> None:
         self._pulse_action = None
@@ -510,7 +512,12 @@ class AutoController:
 
     def _action_to_pwm(self, action: str, level: int) -> tuple[int, int]:
         neutral = int(self.config.neutral_us)
-        active = int(self.config.level2_us if level >= 2 else self.config.level1_us)
+        if level >= 3:
+            active = int(self.config.level3_us)
+        elif level >= 2:
+            active = int(self.config.level2_us)
+        else:
+            active = int(self.config.level1_us)
         if action == "coast":
             return neutral, neutral
         if action == "observe":
