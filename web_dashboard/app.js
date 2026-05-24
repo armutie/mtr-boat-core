@@ -20,6 +20,7 @@ const state = {
     sse: { everConnected: false, lastEventAt: 0 },
     stopRetry: null,
     serverManual: null,
+    autoRetryAt: 0,
     limits: { manual_slew_per_s: 0.0, stale_after_s: 0.45 },
     actuatorErrorAt: 0,
     pendingMode: null,
@@ -338,6 +339,9 @@ function postAutoWaypoints() {
     .then(() => {
       state.control.serverReachable = true;
       text("#auto-status-reason", waypoints.length ? "route loaded" : "route cleared");
+      if (waypoints.length && state.control.surfaceMode === "auto" && state.control.mode !== "auto") {
+        requestModeChange("auto");
+      }
     })
     .catch((error) => {
       state.control.serverReachable = false;
@@ -1197,6 +1201,23 @@ function updateDom(data) {
   updateStaleness(manual);
   updateActuatorBanner(manual);
   updateAutoMission(data, manual, { mmHealth, gnssHealth, imuHealth });
+  maybeRetryAutoArm(manual);
+}
+
+function maybeRetryAutoArm(manual) {
+  const status = manual?.auto_status || {};
+  const now = performance.now();
+  if (
+    state.control.surfaceMode === "auto" &&
+    manual?.mode !== "auto" &&
+    state.auto.waypoints.length > 0 &&
+    status.state === "idle" &&
+    status.reason === "auto not armed" &&
+    now >= state.control.autoRetryAt
+  ) {
+    state.control.autoRetryAt = now + 1500;
+    requestModeChange("auto");
+  }
 }
 
 function updateStaleness(manual) {
