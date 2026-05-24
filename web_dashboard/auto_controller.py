@@ -84,10 +84,6 @@ class AutoController:
             has_route = bool(self._waypoints)
         if not has_route:
             return False, "auto requires at least one waypoint"
-        health, gnss = self._gnss_snapshot()
-        ok, reason = self._valid_gnss(health, gnss)
-        if not ok:
-            return False, reason
         return True, "auto ready"
 
     def _run(self) -> None:

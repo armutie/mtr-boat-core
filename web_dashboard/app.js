@@ -725,7 +725,8 @@ function releaseManualPointers() {
 }
 
 function requestModeChange(mode) {
-  if (!mode || mode === state.control.surfaceMode) return;
+  const retryAutoArm = mode === "auto" && state.control.mode !== "auto";
+  if (!mode || (mode === state.control.surfaceMode && !retryAutoArm)) return;
   if (mode !== "manual") {
     resetIntent();
     releaseManualPointers();
