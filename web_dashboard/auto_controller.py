@@ -1,0 +1,361 @@
+from __future__ import annotations
+
+import threading
+import time
+from dataclasses import asdict, dataclass, field
+
+from gnss.geo import bearing_deg, distance_m, heading_error_deg
+from radar_nav.waypoint import GeoWaypoint, WaypointControl, WaypointNavConfig
+
+
+@dataclass
+class AutoConfig:
+    control_hz: float = 10.0
+    min_speed_for_course_mps: float = 0.3
+    gnss_stale_s: float = 3.0
+    imu_stale_s: float = 2.0
+    heading_deadband_deg: float = 8.0
+    yaw_rate_deadband_dps: float = 2.0
+    yaw_lookahead_s: float = 1.2
+    neutral_us: int = 1500
+    level1_us: int = 1565
+    level2_us: int = 1575
+    level3_us: int = 1585
+    waypoint: WaypointNavConfig = field(default_factory=WaypointNavConfig)
+
+
+class AutoController:
+    def __init__(self, control_state, gnss_reader, imu_reader=None, config: AutoConfig | None = None) -> None:
+        self.control_state = control_state
+        self.gnss_reader = gnss_reader
+        self.imu_reader = imu_reader
+        self.config = config or AutoConfig()
+        self._lock = threading.Lock()
+        self._waypoints: list[GeoWaypoint] = []
+        self._active_index = 0
+        self._status = self._base_status("idle", "no route")
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def shutdown(self) -> None:
+        self._stop_event.set()
+        self._thread.join(timeout=1.0)
+
+    def set_waypoints(self, records: list[dict]) -> dict:
+        waypoints = [self._coerce_waypoint(record, index) for index, record in enumerate(records)]
+        status = {
+            "state": "idle",
+            "reason": "route loaded" if waypoints else "route cleared",
+            "active_index": 0,
+            "total": len(waypoints),
+            "target": None,
+            "distance_m": None,
+            "bearing_deg": None,
+            "heading_deg": None,
+            "heading_error_deg": None,
+            "control_hz": self.config.control_hz,
+        }
+        with self._lock:
+            self._waypoints = waypoints
+            self._active_index = 0
+            self._status = status
+        self.control_state.set_auto_status(self.status())
+        return self.route_snapshot()
+
+    def route_snapshot(self) -> dict:
+        return {"waypoints": [asdict(item) for item in self._waypoints], "status": self.status()}
+
+    def status(self) -> dict:
+        with self._lock:
+            return dict(self._status)
+
+    def can_arm(self) -> tuple[bool, str]:
+        with self._lock:
+            has_route = bool(self._waypoints)
+        if not has_route:
+            return False, "auto requires at least one waypoint"
+        health, gnss = self._gnss_snapshot()
+        ok, reason = self._valid_gnss(health, gnss)
+        if not ok:
+            return False, reason
+        if not self._heading_available(gnss):
+            return False, "auto requires GNSS course at moving speed"
+        return True, "auto ready"
+
+    def _run(self) -> None:
+        period = 1.0 / max(self.config.control_hz, 1.0)
+        while not self._stop_event.is_set():
+            self._tick()
+            self._stop_event.wait(period)
+
+    def _tick(self) -> None:
+        with self.control_state._lock:  # noqa: SLF001 - dashboard-local coordination
+            mode = self.control_state.mode
+        if mode != "auto":
+            self._set_status(self._base_status("idle", "auto not armed"))
+            self.control_state.set_auto_status(self.status())
+            return
+
+        health, gnss = self._gnss_snapshot()
+        ok, reason = self._valid_gnss(health, gnss)
+        if not ok:
+            self._block(reason)
+            return
+        imu_health, imu = self._imu_snapshot()
+
+        heading = self._resolve_heading(gnss)
+        if heading is None:
+            self._block("heading unavailable or too slow for GNSS course")
+            return
+
+        with self._lock:
+            if not self._waypoints:
+                waypoint = None
+            elif self._active_index >= len(self._waypoints):
+                waypoint = None
+            else:
+                waypoint = self._waypoints[self._active_index]
+                active_index = self._active_index
+                total = len(self._waypoints)
+
+        if waypoint is None:
+            self._set_status(self._base_status("reached", "route complete"))
+            self.control_state.apply_auto_pwm(self.config.neutral_us, self.config.neutral_us, "route complete", self.status())
+            return
+
+        dist = distance_m(float(gnss["lat"]), float(gnss["lon"]), waypoint.lat, waypoint.lon)
+        bearing = bearing_deg(float(gnss["lat"]), float(gnss["lon"]), waypoint.lat, waypoint.lon)
+        error = heading_error_deg(heading, bearing)
+        control = self._compute_guesstimate_control(dist, error, imu_health, imu)
+
+        if control.reached:
+            with self._lock:
+                self._active_index += 1
+                done = self._active_index >= len(self._waypoints)
+            if done:
+                status = self._status_for("reached", "route complete", waypoint, active_index, total, dist, bearing, error, heading)
+                self._set_status(status)
+                self.control_state.apply_auto_pwm(self.config.neutral_us, self.config.neutral_us, "route complete", status)
+            else:
+                self._set_status(self._base_status("navigating", "waypoint reached; advancing"))
+            return
+
+        status = self._status_for(
+            "navigating",
+            f"target {active_index + 1}/{total}: {dist:.1f} m",
+            waypoint,
+            active_index,
+            total,
+            dist,
+            bearing,
+            error,
+            heading,
+            control.metadata,
+        )
+        self._set_status(status)
+        self.control_state.apply_auto_pwm(control.left_us, control.right_us, status["reason"], status)
+
+    def _block(self, reason: str) -> None:
+        status = self._base_status("blocked", reason)
+        self._set_status(status)
+        self.control_state.apply_auto_pwm(self.config.neutral_us, self.config.neutral_us, reason, status)
+
+    def _gnss_snapshot(self) -> tuple[str, dict]:
+        if self.gnss_reader is None:
+            return "unavailable", {}
+        return self.gnss_reader.snapshot()
+
+    def _imu_snapshot(self) -> tuple[str, dict]:
+        if self.imu_reader is None:
+            return "unavailable", {}
+        return self.imu_reader.snapshot()
+
+    def _valid_gnss(self, health: str, gnss: dict) -> tuple[bool, str]:
+        if health not in ("live", "waiting"):
+            return False, f"GNSS {health}"
+        if gnss.get("fix") not in ("fix", "estimated"):
+            return False, "GNSS fix unavailable"
+        if gnss.get("lat") is None or gnss.get("lon") is None:
+            return False, "GNSS position unavailable"
+        age = gnss.get("age_s")
+        if age is not None and float(age) > self.config.gnss_stale_s:
+            return False, "GNSS stale"
+        return True, "GNSS ok"
+
+    def _heading_available(self, gnss: dict) -> bool:
+        return self._resolve_heading(gnss) is not None
+
+    def _resolve_heading(self, gnss: dict) -> float | None:
+        heading = gnss.get("heading_deg")
+        if heading is None:
+            return None
+        speed = gnss.get("speed_mps")
+        if speed is None or float(speed) < self.config.min_speed_for_course_mps:
+            return None
+        return float(heading) % 360.0
+
+    def _valid_imu_yaw_rate(self, health: str, imu: dict) -> float | None:
+        if health != "live":
+            return None
+        age = imu.get("age_s")
+        if age is not None and float(age) > self.config.imu_stale_s:
+            return None
+        yaw_rate = imu.get("gyro_z_dps")
+        if yaw_rate is None:
+            return None
+        yaw_rate = float(yaw_rate)
+        return 0.0 if abs(yaw_rate) < self.config.yaw_rate_deadband_dps else yaw_rate
+
+    def _compute_guesstimate_control(self, dist: float, error: float, imu_health: str, imu: dict) -> WaypointControl:
+        reached = dist <= self.config.waypoint.reach_radius_m
+        metadata = {
+            "controller": "guesstimate_rate_v1",
+            "raw_heading_error_deg": round(error, 2),
+            "imu_health": imu_health,
+            "yaw_rate_dps": None,
+            "predicted_error_deg": round(error, 2),
+        }
+        if reached:
+            return WaypointControl(
+                distance_m=dist,
+                heading_error_deg=error,
+                reached=True,
+                left_us=self.config.neutral_us,
+                right_us=self.config.neutral_us,
+                action="reached",
+                metadata={**metadata, "action": "reached"},
+            )
+
+        yaw_rate = self._valid_imu_yaw_rate(imu_health, imu)
+        predicted_error = error
+        if yaw_rate is not None:
+            predicted_error = heading_error_deg(yaw_rate * self.config.yaw_lookahead_s, error)
+            metadata["yaw_rate_dps"] = round(yaw_rate, 2)
+            metadata["predicted_error_deg"] = round(predicted_error, 2)
+
+        if abs(predicted_error) <= self.config.heading_deadband_deg:
+            action = "forward"
+            steering_reason = "coasting/aligned"
+        else:
+            action = "arc_right" if predicted_error > 0 else "arc_left"
+            steering_reason = "correcting predicted heading error"
+
+        abs_error = abs(error)
+        abs_predicted = abs(predicted_error)
+        if dist <= self.config.waypoint.approach_slow_radius_m:
+            level = 1
+            throttle_reason = "near waypoint"
+        elif abs_error > 55.0 or abs_predicted > 45.0:
+            level = 1
+            throttle_reason = "large heading correction"
+        elif abs_error > 22.0 or abs_predicted > 18.0:
+            level = 2
+            throttle_reason = "moderate heading correction"
+        else:
+            level = 2
+            throttle_reason = "tracking waypoint"
+
+        # When we are already rotating quickly toward the target, do not add
+        # extra differential thrust; let the boat's momentum carry the arc.
+        if yaw_rate is not None and error * yaw_rate > 0 and abs(yaw_rate) * self.config.yaw_lookahead_s >= abs_error * 0.65:
+            action = "coast"
+            steering_reason = "yaw rate already correcting"
+
+        left_us, right_us = self._action_to_pwm(action, level)
+        return WaypointControl(
+            distance_m=dist,
+            heading_error_deg=error,
+            reached=False,
+            left_us=left_us,
+            right_us=right_us,
+            action=action,
+            metadata={
+                **metadata,
+                "action": action,
+                "left_us": left_us,
+                "right_us": right_us,
+                "steering_reason": steering_reason,
+                "throttle_reason": throttle_reason,
+                "level": level,
+                "level1_us": self.config.level1_us,
+                "level2_us": self.config.level2_us,
+                "level3_us": self.config.level3_us,
+            },
+        )
+
+    def _action_to_pwm(self, action: str, level: int) -> tuple[int, int]:
+        neutral = int(self.config.neutral_us)
+        active = int(self.config.level2_us if level >= 2 else self.config.level1_us)
+        if action == "coast":
+            return neutral, neutral
+        if action.startswith("forward"):
+            return active, active
+        if action.startswith("arc_right"):
+            return active, neutral
+        if action.startswith("arc_left"):
+            return neutral, active
+        return neutral, neutral
+
+    def _set_status(self, status: dict) -> None:
+        with self._lock:
+            self._status = status
+
+    def _base_status(self, state: str, reason: str) -> dict:
+        with self._lock:
+            total = len(self._waypoints)
+            active = self._active_index
+        return {
+            "state": state,
+            "reason": reason,
+            "active_index": active,
+            "total": total,
+            "target": None,
+            "distance_m": None,
+            "bearing_deg": None,
+            "heading_deg": None,
+            "heading_error_deg": None,
+            "control_hz": self.config.control_hz,
+        }
+
+    def _status_for(
+        self,
+        state: str,
+        reason: str,
+        waypoint: GeoWaypoint,
+        active_index: int,
+        total: int,
+        dist: float,
+        bearing: float,
+        error: float,
+        heading: float,
+        control_metadata: dict | None = None,
+    ) -> dict:
+        return {
+            "state": state,
+            "reason": reason,
+            "active_index": active_index,
+            "total": total,
+            "target": asdict(waypoint),
+            "distance_m": round(dist, 2),
+            "bearing_deg": round(bearing, 1),
+            "heading_deg": round(heading, 1),
+            "heading_error_deg": round(error, 1),
+            "control": control_metadata or {},
+            "control_hz": self.config.control_hz,
+        }
+
+    @staticmethod
+    def _coerce_waypoint(record: dict, index: int) -> GeoWaypoint:
+        if not isinstance(record, dict):
+            raise ValueError("waypoint must be an object")
+        lat = float(record["lat"])
+        lon = float(record["lon"])
+        if not -90.0 <= lat <= 90.0:
+            raise ValueError("waypoint lat must be -90..90")
+        if not -180.0 <= lon <= 180.0:
+            raise ValueError("waypoint lon must be -180..180")
+        label = str(record.get("label") or f"WP {index + 1}")
+        return GeoWaypoint(lat=lat, lon=lon, label=label)

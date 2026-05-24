@@ -678,13 +678,13 @@ class DashboardState:
         snapshot = self.mmwave_state.snapshot()
         snapshot["session"]["log_paths"] = self.log_paths
         snapshot["session"]["logging"] = bool(self.log_paths)
-        snapshot["manual_control"] = self.control.snapshot()
+        snapshot["control"] = self.control.snapshot()
         if self.actuator is not None:
-            snapshot["manual_control"]["actuator"] = self.actuator.status_label()
-            snapshot["manual_control"]["effective"] = self.actuator.effective_output()
+            snapshot["control"]["actuator"] = self.actuator.status_label()
+            snapshot["control"]["effective"] = self.actuator.effective_output()
         else:
-            snapshot["manual_control"]["actuator"] = "dry-run"
-            snapshot["manual_control"]["effective"] = None
+            snapshot["control"]["actuator"] = "dry-run"
+            snapshot["control"]["effective"] = None
         if self.gnss_reader is not None:
             health, gnss = self.gnss_reader.snapshot()
             snapshot["health"]["gnss"] = health
@@ -696,7 +696,58 @@ class DashboardState:
         return snapshot
 
 
+class SessionLogger:
+    """Fixed-rate unified dashboard logger.
+
+    Each row is the same high-level snapshot shape the browser receives:
+    health, GNSS, IMU, mmWave, control intent, and effective
+    actuator output. Raw per-sensor logs can still be enabled separately with
+    --log when deeper parser debugging is needed.
+    """
+
+    def __init__(self, state: DashboardState, path: Path, hz: float = 10.0):
+        self.state = state
+        self.hz = max(1.0, hz)
+        self._log = JsonlLog(path)
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True, name="session-logger")
+
+    @property
+    def path(self) -> Path:
+        return self._log.path
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def shutdown(self) -> None:
+        self._stop_event.set()
+        self._thread.join(timeout=1.0)
+        try:
+            self._log.close()
+        except Exception:
+            pass
+
+    def _run(self) -> None:
+        period = 1.0 / self.hz
+        while not self._stop_event.is_set():
+            started = time.monotonic()
+            try:
+                snapshot = self.state.snapshot()
+                snapshot["schema"] = "dashboard_session_v1"
+                self._log.write(snapshot)
+            except Exception as exc:
+                self._log.write({
+                    "schema": "dashboard_session_v1",
+                    "timestamp": time.time(),
+                    "error": f"session logger failed: {exc}",
+                })
+            elapsed = time.monotonic() - started
+            if self._stop_event.wait(max(0.0, period - elapsed)):
+                break
+
+
 VALID_MODES = ("off", "manual", "auto")
+AUTO_ARM_CHECK = None
 
 
 class ControlInputError(ValueError):
@@ -723,8 +774,11 @@ class ControlState:
         self.mode = "off"
         self.throttle = 0.0
         self.steering = 0.0
+        self.auto_left_us: int | None = None
+        self.auto_right_us: int | None = None
         self.last_update_at: float | None = None
         self.reason = "off"
+        self.auto_status = {"state": "idle", "reason": "auto not armed"}
 
     @staticmethod
     def _coerce_float(value, name: str, default: float) -> float:
@@ -760,10 +814,12 @@ class ControlState:
         steering = max(-1.0, min(1.0, steering))
 
         with self._lock:
+            touched = True
             # /api/control/manual is throttle/steering-only. It cannot enter
             # manual mode (use /api/control/mode for that) so a stale heartbeat
             # racing after set_mode("off") can never re-arm the boat. It can
-            # still cooperatively disarm by sending enabled=false.
+            # still cooperatively disarm by sending enabled=false. When auto is
+            # armed, browser manual heartbeats are ignored entirely.
             if not enabled and self.mode == "manual":
                 self.mode = "off"
                 self.throttle = 0.0
@@ -779,32 +835,59 @@ class ControlState:
                 if self.mode == "off":
                     self.reason = "off"
                 elif self.mode == "auto":
-                    self.reason = "auto not implemented"
-            self.last_update_at = time.time()
+                    touched = False
+            if touched:
+                self.last_update_at = time.time()
         return self.snapshot()
 
     def set_mode(self, mode: str) -> dict:
         if mode not in VALID_MODES:
             raise ControlInputError(f"mode must be one of {VALID_MODES}")
+        if mode == "auto" and AUTO_ARM_CHECK is not None:
+            ok, reason = AUTO_ARM_CHECK()
+            if not ok:
+                raise ControlInputError(reason)
         with self._lock:
             self.mode = mode
             if mode != "manual":
                 self.throttle = 0.0
                 self.steering = 0.0
+            if mode != "auto":
+                self.auto_left_us = None
+                self.auto_right_us = None
             self.last_update_at = time.time()
             if mode == "off":
                 self.reason = "off"
             elif mode == "manual":
                 self.reason = "manual armed"
             else:
-                self.reason = "auto not implemented"
+                self.reason = "auto armed"
         return self.snapshot()
+
+    def apply_auto_pwm(self, left_us: int, right_us: int, reason: str, status: dict | None = None) -> dict:
+        with self._lock:
+            if self.mode == "auto":
+                self.throttle = 0.0
+                self.steering = 0.0
+                self.auto_left_us = int(left_us)
+                self.auto_right_us = int(right_us)
+                self.last_update_at = time.time()
+                self.reason = reason
+            if status is not None:
+                self.auto_status = dict(status)
+        return self.snapshot()
+
+    def set_auto_status(self, status: dict) -> None:
+        with self._lock:
+            self.auto_status = dict(status)
 
     def stop(self) -> dict:
         with self._lock:
             self.mode = "off"
             self.throttle = 0.0
             self.steering = 0.0
+            self.auto_left_us = None
+            self.auto_right_us = None
             self.last_update_at = time.time()
             self.reason = "operator stop"
         return self.snapshot()
@@ -813,8 +896,8 @@ class ControlState:
         """Return the actuator-bound intent as a plain dict.
 
         Used by the actuator bridge on its own clock; does not include UI
-        chrome. ``stale`` is True when manual mode hasn't received a fresh
-        payload within ``stale_after_s``.
+        chrome. ``stale`` is True when manual/auto mode has not received a
+        fresh command within ``stale_after_s``.
         """
 
         now = time.time()
@@ -822,6 +905,8 @@ class ControlState:
             mode = self.mode
             throttle = self.throttle
             steering = self.steering
+            auto_left_us = self.auto_left_us
+            auto_right_us = self.auto_right_us
             last_update_at = self.last_update_at
             reason = self.reason
 
@@ -845,13 +930,27 @@ class ControlState:
                 "reason": reason,
             }
         if mode == "auto":
+            stale = last_update_at is None or now - last_update_at > self.stale_after_s
+            if stale:
+                return {
+                    "mode": mode,
+                    "source": "auto",
+                    "stale": True,
+                    "throttle": 0.0,
+                    "steering": 0.0,
+                    "left_us": None,
+                    "right_us": None,
+                    "reason": "auto stale; neutral output",
+                }
             return {
                 "mode": mode,
                 "source": "auto",
                 "stale": False,
-                "throttle": 0.0,
-                "steering": 0.0,
-                "reason": "auto not implemented",
+                "throttle": throttle,
+                "steering": steering,
+                "left_us": auto_left_us,
+                "right_us": auto_right_us,
+                "reason": reason,
             }
         return {
             "mode": mode,
@@ -868,21 +967,24 @@ class ControlState:
             mode = self.mode
             throttle = self.throttle
             steering = self.steering
+            auto_left_us = self.auto_left_us
+            auto_right_us = self.auto_right_us
             last_update_at = self.last_update_at
             reason = self.reason
             stale_after_s = self.stale_after_s
             manual_slew_per_s = self.manual_slew_per_s
+            auto_status = dict(self.auto_status)
 
         age_s = None if last_update_at is None else round(now - last_update_at, 3)
-        stale = mode == "manual" and (last_update_at is None or now - last_update_at > stale_after_s)
-        enabled = mode == "manual"
+        stale = mode in ("manual", "auto") and (last_update_at is None or now - last_update_at > stale_after_s)
+        enabled = mode in ("manual", "auto")
         effective_throttle = 0.0 if stale or not enabled else throttle
         effective_steering = 0.0 if stale or not enabled else steering
         left = max(0.0, min(1.0, effective_throttle * (1.0 + effective_steering)))
         right = max(0.0, min(1.0, effective_throttle * (1.0 - effective_steering)))
 
         if stale:
-            reason = "manual command stale; neutral output"
+            reason = f"{mode} command stale; neutral output"
 
         return {
             "enabled": enabled,
@@ -895,11 +997,14 @@ class ControlState:
                 "steering": effective_steering,
                 "left_thruster": left,
                 "right_thruster": right,
+                "left_us": None if stale or mode != "auto" else auto_left_us,
+                "right_us": None if stale or mode != "auto" else auto_right_us,
             },
             "limits": {
                 "manual_slew_per_s": manual_slew_per_s,
                 "stale_after_s": stale_after_s,
             },
+            "auto_status": auto_status,
             "reason": reason,
         }
 
@@ -1049,6 +1154,8 @@ class ActuatorBridge:
             intent = self.control_state.command_snapshot()
             target_throttle = float(intent.get("throttle", 0.0))
             target_steering = float(intent.get("steering", 0.0))
+            direct_left_us = intent.get("left_us")
+            direct_right_us = intent.get("right_us")
 
             # When the upstream ControlState already reports stale, command_snapshot
             # already returns neutral. We additionally guard against a wedged
@@ -1063,18 +1170,32 @@ class ActuatorBridge:
                     target_throttle = 0.0
                     target_steering = 0.0
 
-            with self._lock:
-                last_throttle = self._last_throttle
-            new_throttle = self._slew_throttle(last_throttle, target_throttle, dt)
-            new_steering = target_steering
-
-            pair = self._map(
-                new_throttle,
-                new_steering,
-                self.mapping,
-                enabled=intent.get("mode") == "manual" and not intent.get("stale", False),
+            direct_auto = (
+                intent.get("mode") == "auto"
+                and not intent.get("stale", False)
+                and direct_left_us is not None
+                and direct_right_us is not None
             )
-            pair_us = (pair.left_us, pair.right_us)
+            if direct_auto:
+                pair_us = (
+                    self.mapping.clamp_pwm(float(direct_left_us)),
+                    self.mapping.clamp_pwm(float(direct_right_us)),
+                )
+                new_throttle = 0.0
+                new_steering = 0.0
+            else:
+                with self._lock:
+                    last_throttle = self._last_throttle
+                new_throttle = self._slew_throttle(last_throttle, target_throttle, dt)
+                new_steering = target_steering
+
+                pair = self._map(
+                    new_throttle,
+                    new_steering,
+                    self.mapping,
+                    enabled=intent.get("mode") == "manual" and not intent.get("stale", False),
+                )
+                pair_us = (pair.left_us, pair.right_us)
 
             sent = False
             if self.dry_run or self.serial_writer is None:
@@ -1103,6 +1224,7 @@ class ActuatorBridge:
 
 
 STATE = DashboardState(UnavailableMmwaveState(time.time()), None, None, {})
+AUTO_CONTROLLER = None
 
 
 SNAPSHOT_HZ = 15.0
@@ -1172,6 +1294,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     raise ControlInputError("mode must be a string")
                 self.write_json(STATE.control.set_mode(mode))
                 return
+            if path == "/api/control/waypoints":
+                if AUTO_CONTROLLER is None:
+                    raise ControlInputError("auto controller unavailable")
+                waypoints = payload.get("waypoints") if isinstance(payload, dict) else None
+                if not isinstance(waypoints, list):
+                    raise ControlInputError("waypoints must be a list")
+                self.write_json(AUTO_CONTROLLER.set_waypoints(waypoints))
+                return
+        except ValueError as exc:
+            self.write_json_error(400, str(exc))
+            return
         except ControlInputError as exc:
             self.write_json_error(400, str(exc))
             return
@@ -1256,9 +1389,11 @@ def _log_path(name: str) -> Path:
 
 
 def main() -> None:
-    global STATE, SNAPSHOT_HZ
+    global AUTO_ARM_CHECK, AUTO_CONTROLLER, STATE, SNAPSHOT_HZ
     from boat_core.config import choose, load_boat_config, section
+    from radar_nav.waypoint import WaypointNavConfig
     from thruster_control import Esp32ThrusterSerial, ThrusterMapping
+    from web_dashboard.auto_controller import AutoConfig, AutoController
 
     started_at = time.time()
     parser = argparse.ArgumentParser(description="MTR realtime sensor dashboard")
@@ -1284,11 +1419,12 @@ def main() -> None:
     parser.add_argument("--imu-bus", type=int, help="IMU I2C bus")
     parser.add_argument("--imu-address", help="IMU I2C address")
     parser.add_argument("--imu-calibration-samples", type=int, default=200)
-    parser.add_argument("--log", action="store_true", help="Write live GNSS/IMU JSONL logs")
+    parser.add_argument("--log", action="store_true", help="Write raw live GNSS/IMU/mmWave JSONL logs in addition to the session log")
+    parser.add_argument("--no-session-log", action="store_true", help="Disable the unified dashboard session JSONL log")
+    parser.add_argument("--session-log-hz", type=float, help="Unified session log rate (Hz, default 10)")
     parser.add_argument("--esp32-port", help="ESP32 thruster serial port (e.g. COM3 or /dev/ttyACM0)")
     parser.add_argument("--esp32-baud", type=int, help="ESP32 serial baud")
-    parser.add_argument("--actuator-dry-run", action="store_true", help="Force dry-run mode for the actuator bridge")
-    parser.add_argument("--actuator-live", action="store_true", help="Force live mode (require ESP32 port to open)")
+    parser.add_argument("--actuator-dry-run", action="store_true", help="Do not write motor commands to the ESP32")
     parser.add_argument("--snapshot-hz", type=float, help="SSE telemetry rate (Hz, default 15)")
     parser.add_argument("--send-hz", type=float, help="Actuator command send rate (Hz, default 20)")
     parser.add_argument("--manual-slew-per-s", type=float, help="Per-axis slew limit (units/s, default 4.0)")
@@ -1301,6 +1437,7 @@ def main() -> None:
     esp32_config = section(config, "esp32")
     thruster_config = section(config, "thruster")
     runtime_config = section(config, "runtime")
+    auto_config = section(config, "auto")
     cfg_port = choose(args.cfg_port, radar_config, "cfg_port")
     cfg_file = choose(args.cfg_file, radar_config, "cfg_file")
     data_port = choose(args.data_port, radar_config, "data_port")
@@ -1314,7 +1451,26 @@ def main() -> None:
 
     snapshot_hz = float(choose(args.snapshot_hz, runtime_config, "snapshot_hz", 30.0))
     send_hz = float(choose(args.send_hz, runtime_config, "send_hz", 20.0))
+    session_log_hz = float(choose(args.session_log_hz, runtime_config, "session_log_hz", 10.0))
     manual_slew_per_s = float(choose(args.manual_slew_per_s, runtime_config, "manual_slew_per_s", 4.0))
+    waypoint_cfg = WaypointNavConfig(
+        reach_radius_m=float(auto_config.get("reach_radius_m", 2.0)),
+        approach_slow_radius_m=float(auto_config.get("approach_slow_radius_m", 8.0)),
+    )
+    auto_runtime_cfg = AutoConfig(
+        control_hz=float(auto_config.get("control_hz", 10.0)),
+        min_speed_for_course_mps=float(auto_config.get("min_speed_for_course_mps", 0.3)),
+        gnss_stale_s=float(auto_config.get("gnss_stale_s", 3.0)),
+        imu_stale_s=float(auto_config.get("imu_stale_s", 2.0)),
+        heading_deadband_deg=float(auto_config.get("heading_deadband_deg", 8.0)),
+        yaw_rate_deadband_dps=float(auto_config.get("yaw_rate_deadband_dps", 2.0)),
+        yaw_lookahead_s=float(auto_config.get("yaw_lookahead_s", 1.2)),
+        neutral_us=int(thruster_config.get("neutral_us", 1500)),
+        level1_us=int(auto_config.get("level1_us", thruster_config.get("forward_min_us", 1565))),
+        level2_us=int(auto_config.get("level2_us", 1575)),
+        level3_us=int(auto_config.get("level3_us", 1585)),
+        waypoint=waypoint_cfg,
+    )
 
     SNAPSHOT_HZ = max(1.0, snapshot_hz)
 
@@ -1339,9 +1495,6 @@ def main() -> None:
     modes = [args.demo, args.ros, use_direct_mmwave]
     if sum(1 for enabled in modes if enabled) > 1:
         parser.error("--demo, --ros, and direct mmWave mode are mutually exclusive")
-
-    if args.actuator_dry_run and args.actuator_live:
-        parser.error("--actuator-dry-run and --actuator-live are mutually exclusive")
 
     if args.demo:
         mmwave_state = DemoSensorState(started_at)
@@ -1392,6 +1545,9 @@ def main() -> None:
         log_paths,
         manual_slew_per_s=manual_slew_per_s,
     )
+    AUTO_CONTROLLER = AutoController(STATE.control, gnss_reader, imu_reader, auto_runtime_cfg)
+    AUTO_ARM_CHECK = AUTO_CONTROLLER.can_arm
+    AUTO_CONTROLLER.start()
 
     mapping = ThrusterMapping(
         neutral_us=int(thruster_config.get("neutral_us", 1500)),
@@ -1408,10 +1564,10 @@ def main() -> None:
     esp32_present = bool(esp32_port) and _serial_device_present(
         esp32_port, _platform_candidates([f"/dev/ttyACM{i}" for i in range(3)])
     )
-    want_live = args.actuator_live or (esp32_present and not args.actuator_dry_run)
+    want_live = not args.actuator_dry_run and bool(esp32_port)
     if want_live:
         if not esp32_port:
-            parser.error("--esp32-port is required for --actuator-live unless set in config")
+            parser.error("--esp32-port is required unless set in config; use --actuator-dry-run to avoid motor output")
         try:
             esp32_serial = Esp32ThrusterSerial(esp32_port, baud=esp32_baud)
             actuator_dry_run = False
@@ -1435,6 +1591,11 @@ def main() -> None:
     actuator_bridge.start()
     if actuator_bridge.log_path is not None:
         log_paths["actuator"] = actuator_bridge.log_path
+    session_logger = None
+    if not args.no_session_log:
+        session_logger = SessionLogger(STATE, _log_path("session"), hz=session_log_hz)
+        log_paths["session"] = str(session_logger.path)
+        session_logger.start()
 
     class _LowLatencyServer(ThreadingHTTPServer):
         # Disable Nagle on each accepted socket so 50-byte heartbeat POSTs
@@ -1485,6 +1646,10 @@ def main() -> None:
     try:
         server.serve_forever()
     finally:
+        if AUTO_CONTROLLER is not None:
+            AUTO_CONTROLLER.shutdown()
+        if session_logger is not None:
+            session_logger.shutdown()
         actuator_bridge.shutdown()
 
 

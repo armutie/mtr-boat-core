@@ -19,16 +19,16 @@
   },
   "thruster": {
     "neutral_us": 1500,
-    "forward_min_us": 1520,
-    "forward_max_us": 1550,
+    "forward_min_us": 1565,
+    "forward_max_us": 1650,
     "hard_min_us": 1350,
     "hard_max_us": 2000,
     "steering_slowdown": 0.35,
     "differential": true
   },
   "ramp": {
-    "start_us": 1505,
-    "end_us": 1550,
+    "start_us": 1565,
+    "end_us": 1650,
     "step_us": 5,
     "hold_s": 1.0,
     "neutral_hold_s": 5.0
@@ -38,5 +38,19 @@
     "snapshot_hz": 30.0,
     "stale_timeout_s": 1.0,
     "manual_slew_per_s": 4.0
+  },
+  "auto": {
+    "control_hz": 10.0,
+    "reach_radius_m": 2.0,
+    "approach_slow_radius_m": 8.0,
+    "level1_us": 1565,
+    "level2_us": 1575,
+    "level3_us": 1585,
+    "heading_deadband_deg": 8.0,
+    "yaw_rate_deadband_dps": 2.0,
+    "yaw_lookahead_s": 1.2,
+    "imu_stale_s": 2.0,
+    "min_speed_for_course_mps": 0.3,
+    "gnss_stale_s": 3.0
   }
 }
