@@ -48,7 +48,7 @@ Arduino IDE setup:
 The firmware listens for USB serial lines:
 
 ```text
-PWM 1550
+PWM 1650
 STOP
 ```
 
@@ -73,14 +73,55 @@ Typical ports:
 - ESP32: `/dev/ttyACM0`
 - radar config UART: `/dev/ttyUSB0`
 - radar data UART: `/dev/ttyUSB1`
+- GNSS: often `/dev/ttyACM2` or another `/dev/ttyACM*`
 
 Create a local robot config:
 
 ```bash
 cp config/boat.example.json config/boat.local.json
+nano config/boat.local.json
 ```
 
-Edit `config/boat.local.json` if the ports differ. The local file is ignored by Git, so each machine can keep its own serial port settings.
+Edit `config/boat.local.json` before field tests. At minimum, set the serial
+ports for the devices actually connected to the Orange Pi:
+
+```json
+{
+  "radar": {
+    "cfg_port": "/dev/ttyUSB0",
+    "data_port": "/dev/ttyUSB1"
+  },
+  "esp32": {
+    "port": "/dev/ttyACM0"
+  },
+  "gnss": {
+    "port": "/dev/ttyACM2"
+  },
+  "imu": {
+    "bus": 2,
+    "address": "0x68"
+  }
+}
+```
+
+Keep the other values from `boat.example.json` unless you are deliberately
+tuning them. `config/boat.local.json` is ignored by Git, so each laptop/Pi can
+keep its own serial port settings.
+
+The following commands read `config/boat.local.json` by default:
+
+- `python3 web_dashboard/server.py`
+- `python3 scripts/run_gnss_live.py`
+- `python3 scripts/run_imu_live.py`
+- `python3 scripts/run_thruster_ramp.py`
+- `python3 scripts/run_nav_esp32.py`
+- `python3 scripts/test_gnss_imu_heading.py`
+- `python3 scripts/test_boat_response.py`
+- `python3 scripts/test_imu_yaw_drift.py`
+
+If `config/boat.local.json` does not exist, these commands fall back to
+`config/boat.example.json`, but that is only a template. For the real boat, copy
+the example and set the actual ports.
 
 First test the ESP32/thruster path without radar:
 
@@ -141,8 +182,8 @@ python3 scripts/run_nav_esp32.py --log
 PWM defaults:
 
 - `1500 us`: neutral / stop
-- `1520 us`: minimum forward output
-- `1550 us`: default gentle forward cap in `config/boat.example.json`
+- `1565 us`: minimum forward output observed to start the test motor
+- `1650 us`: default forward cap in `config/boat.example.json`
 - `1350-2000 us`: hard safety clamp accepted by the Python bridge
 
 Use physical power cutoff during thruster tests. `Ctrl+C` sends `STOP`, but hardware power control is the real safety path.
@@ -264,10 +305,22 @@ python3 web_dashboard/server.py
 
 By default the dashboard binds to `0.0.0.0`, auto-starts the IMU reader, starts
 direct mmWave/GNSS readers when their local serial device files are present, and
-leaves missing feeds unavailable or error-marked. Use `--demo` for UI-only
-testing, `--ros --mmwave-topic radar/nav_state_json` for a ROS mmWave feed, or
-`--no-mmwave`, `--no-gnss`, and `--no-imu` to disable a local reader while
-debugging.
+uses the configured ESP32 port for live motor output when it can open it.
+Use `--actuator-dry-run` when you want the dashboard to run without writing
+motor commands. Use `--demo` for UI-only testing, `--ros --mmwave-topic
+radar/nav_state_json` for a ROS mmWave feed, or `--no-mmwave`, `--no-gnss`,
+and `--no-imu` to disable a local reader while debugging.
+
+The dashboard always writes a unified session log unless disabled:
+
+```text
+logs/dashboard_session_YYYYMMDD_HHMMSS.jsonl
+```
+
+Each session row includes the current mode, manual/auto command, effective
+left/right PWM, GNSS, IMU, and radar snapshot. Add `--log` only when you also
+want raw per-sensor logs such as `dashboard_gnss_*.jsonl`,
+`dashboard_imu_*.jsonl`, and `dashboard_mmwave_*.jsonl`.
 
 Open:
 
