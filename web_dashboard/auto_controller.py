@@ -51,6 +51,7 @@ class AutoController:
         self._pulse_until = 0.0
         self._pulse_observe_until = 0.0
         self._latched_turn: str | None = None
+        self._last_active_pwm: tuple[int, int] = (self.config.neutral_us, self.config.neutral_us)
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
@@ -486,6 +487,7 @@ class AutoController:
         self._pulse_until = 0.0
         self._pulse_observe_until = 0.0
         self._latched_turn = None
+        self._last_active_pwm = (self.config.neutral_us, self.config.neutral_us)
 
     def _action_to_pwm(self, action: str, level: int) -> tuple[int, int]:
         neutral = int(self.config.neutral_us)
@@ -498,13 +500,16 @@ class AutoController:
         if action == "coast":
             return neutral, neutral
         if action == "observe":
-            return neutral, neutral
+            return self._last_active_pwm
         if action.startswith("forward"):
-            return active, active
+            self._last_active_pwm = (active, active)
+            return self._last_active_pwm
         if action.startswith("arc_right"):
-            return active, neutral
+            self._last_active_pwm = (active, neutral)
+            return self._last_active_pwm
         if action.startswith("arc_left"):
-            return neutral, active
+            self._last_active_pwm = (neutral, active)
+            return self._last_active_pwm
         return neutral, neutral
 
     def _set_status(self, status: dict) -> None:
