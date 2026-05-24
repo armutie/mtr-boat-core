@@ -1255,7 +1255,7 @@ function updateAutoMission(data, control, health) {
   const activeIndex = Number.isInteger(status.active_index) ? status.active_index : null;
   const leftUs = num(output.left_us) ?? state.auto.neutralUs;
   const rightUs = num(output.right_us) ?? state.auto.neutralUs;
-  const action = status?.control?.action || status.state || control?.mode || "off";
+  const action = status?.control?.display_action || status?.control?.action || status.state || control?.mode || "off";
   const reason = status.reason || control?.reason || "waiting for auto command";
   const actuator = typeof control?.actuator === "string" ? control.actuator : "";
   const actuatorHealth = actuator.includes("live") ? "live" : actuator.includes("error") ? "error" : "waiting";

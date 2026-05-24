@@ -423,6 +423,7 @@ class AutoController:
         level = self._nav_level(dist, error, predicted_error)
         abs_error = abs(error)
         abs_predicted = abs(predicted_error)
+        display_action = None
 
         if self._pulse_action is not None and now < self._pulse_until:
             action = self._pulse_action
@@ -430,6 +431,7 @@ class AutoController:
         elif now < self._pulse_observe_until:
             action = "observe"
             steering_reason = "observing yaw after pulse"
+            display_action = self._latched_turn or "hold"
         else:
             self._pulse_action = None
             if abs_error <= self.config.pulse_turn_exit_deg or abs_predicted <= self.config.pulse_turn_exit_deg:
@@ -445,9 +447,11 @@ class AutoController:
                 if yaw_will_cover:
                     action = "observe"
                     steering_reason = "yaw rate already carrying turn"
+                    display_action = self._latched_turn or desired_turn
                 elif self._latched_turn == opposite_turn and abs_predicted < self.config.pulse_reverse_deg:
                     action = "observe"
                     steering_reason = "holding reversal until error is clear"
+                    display_action = self._latched_turn or "hold"
                 elif abs_predicted >= self.config.pulse_turn_enter_deg:
                     action = desired_turn
                     self._latched_turn = desired_turn
@@ -458,12 +462,14 @@ class AutoController:
                 elif self._latched_turn is not None and abs_predicted > self.config.pulse_turn_exit_deg:
                     action = "observe"
                     steering_reason = "between pulse thresholds"
+                    display_action = self._latched_turn
                 else:
                     self._latched_turn = None
                     action = "forward"
                     steering_reason = "near aligned"
 
         left_us, right_us = self._action_to_pwm(action, level)
+        display_action = display_action or action
         return WaypointControl(
             distance_m=dist,
             heading_error_deg=error,
@@ -474,6 +480,7 @@ class AutoController:
             metadata={
                 **metadata,
                 "action": action,
+                "display_action": display_action,
                 "left_us": left_us,
                 "right_us": right_us,
                 "steering_reason": steering_reason,
