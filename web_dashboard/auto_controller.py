@@ -349,20 +349,8 @@ class AutoController:
             action = "arc_right" if predicted_error > 0 else "arc_left"
             steering_reason = "correcting predicted heading error"
 
-        abs_error = abs(error)
-        abs_predicted = abs(predicted_error)
-        if dist <= self.config.waypoint.approach_slow_radius_m:
-            level = 1
-            throttle_reason = "near waypoint"
-        elif abs_error > 55.0 or abs_predicted > 45.0:
-            level = 1
-            throttle_reason = "large heading correction"
-        elif abs_error > 22.0 or abs_predicted > 18.0:
-            level = 2
-            throttle_reason = "moderate heading correction"
-        else:
-            level = 3
-            throttle_reason = "tracking waypoint"
+        level = 3
+        throttle_reason = "max auto output"
 
         # When we are already rotating quickly toward the target, do not add
         # extra differential thrust; let the boat's momentum carry the arc.
@@ -420,7 +408,7 @@ class AutoController:
             )
 
         now = time.monotonic()
-        level = self._nav_level(dist, error, predicted_error)
+        level = 3
         abs_error = abs(error)
         abs_predicted = abs(predicted_error)
         display_action = None
@@ -492,17 +480,6 @@ class AutoController:
                 "pulse_reverse_deg": self.config.pulse_reverse_deg,
             },
         )
-
-    def _nav_level(self, dist: float, error: float, predicted_error: float) -> int:
-        abs_error = abs(error)
-        abs_predicted = abs(predicted_error)
-        if dist <= self.config.waypoint.approach_slow_radius_m:
-            return 1
-        if abs_error > 55.0 or abs_predicted > 45.0:
-            return 1
-        if abs_error > 22.0 or abs_predicted > 18.0:
-            return 2
-        return 3
 
     def _clear_pulse_state(self) -> None:
         self._pulse_action = None
