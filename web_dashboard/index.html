@@ -4,7 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>MTR Boat HUD</title>
-    <link rel="stylesheet" href="styles.css?v=control-v5" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="styles.css?v=control-v6" />
   </head>
   <body>
     <main class="deck">
@@ -62,7 +63,7 @@
               <button class="mode-pill" type="button" data-mode="manual" role="radio" aria-checked="false">Manual</button>
               <button class="mode-pill" type="button" data-mode="auto" role="radio" aria-checked="false">Auto</button>
             </div>
-            <button id="manual-stop" class="stop-button" type="button" aria-keyshortcuts="Space Escape">Stop</button>
+            <button id="manual-stop" class="stop-button" type="button" data-stop-button aria-keyshortcuts="Space Escape">Stop</button>
             <div class="staleness">
               <label>Command freshness</label>
               <div class="staleness-track" aria-hidden="true"><i id="staleness-fill"></i></div>
@@ -95,6 +96,62 @@
               <span title="Throttle ramp-up rate. With Ramp 4.00/s, going from 0 to full throttle takes ~0.25 s. Cuts are instant.">Ramp <b id="manual-throttle-slew">--</b></span>
             </div>
           </article>
+
+          <section class="auto-mission" aria-label="Auto mission planner">
+            <aside class="mission-rail">
+              <div class="mission-brand">
+                <span class="panel-tag">Auto</span>
+                <h2>Mission</h2>
+                <p id="auto-status-reason">Load a route to arm auto.</p>
+              </div>
+              <div class="mode-switch mission-mode" role="radiogroup" aria-label="Drive mode">
+                <button class="mode-pill" type="button" data-mode="off" role="radio" aria-checked="true">Off</button>
+                <button class="mode-pill" type="button" data-mode="manual" role="radio" aria-checked="false">Manual</button>
+                <button class="mode-pill" type="button" data-mode="auto" role="radio" aria-checked="false">Auto</button>
+              </div>
+              <div class="mission-tools" aria-label="Route tools">
+                <button id="auto-add-pin" class="mission-tool" type="button" aria-pressed="false">Add Pin</button>
+                <button id="auto-clear-route" class="mission-tool" type="button">Clear</button>
+                <button id="auto-fit-route" class="mission-tool" type="button">Fit</button>
+                <button id="auto-follow-boat" class="mission-tool" type="button" aria-pressed="true">Follow</button>
+              </div>
+              <div class="mission-stats">
+                <span>Route <b id="auto-route-count">0 WP</b></span>
+                <span>Active <b id="auto-active-wp">--</b></span>
+                <span>Distance <b id="auto-distance">--</b></span>
+                <span>Heading Err <b id="auto-heading-error">--</b></span>
+              </div>
+              <div class="mission-health" aria-label="Sensor health">
+                <span id="auto-health-gnss" class="health-chip" data-health="waiting">GNSS</span>
+                <span id="auto-health-imu" class="health-chip" data-health="waiting">IMU</span>
+                <span id="auto-health-radar" class="health-chip" data-health="waiting">Radar</span>
+                <span id="auto-health-actuator" class="health-chip" data-health="waiting">ESP32</span>
+              </div>
+            </aside>
+
+            <section class="mission-map-frame">
+              <div id="auto-map" class="mission-map"></div>
+              <canvas id="auto-map-fallback" class="mission-map-fallback" width="1200" height="760"></canvas>
+              <div id="auto-map-hint" class="mission-map-hint">Add Pin: off</div>
+            </section>
+
+            <aside class="mission-output" aria-label="Auto output">
+              <div class="output-cluster">
+                <span class="panel-tag">Output</span>
+                <strong id="auto-output-action">off</strong>
+                <p id="auto-output-reason">Waiting for auto command.</p>
+              </div>
+              <canvas id="auto-mini-wheel" width="150" height="150" aria-label="Auto turn indicator"></canvas>
+              <div class="mission-stats output-stats">
+                <span>Drive <b id="auto-drive-percent">0%</b></span>
+                <span>Left <b id="auto-left-pwm">1500</b></span>
+                <span>Right <b id="auto-right-pwm">1500</b></span>
+                <span>Track <b id="auto-track-count">0</b></span>
+              </div>
+            </aside>
+
+            <button id="auto-stop" class="stop-button auto-stop" type="button" data-stop-button aria-keyshortcuts="Space Escape">Stop</button>
+          </section>
 
           <div class="comms-overlay" hidden>
             <div class="comms-message">
@@ -331,6 +388,7 @@
       </section>
     </main>
 
-    <script src="app.js?v=control-v9"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="app.js?v=control-v18"></script>
   </body>
 </html>

@@ -7,6 +7,7 @@ const state = {
   maxTrack: 240,
   control: {
     mode: "off",
+    surfaceMode: "off",
     intent: { throttle: 0, steering: 0 },
     wheelAngleDeg: 0,
     wheelMaxDeg: 115,
@@ -23,6 +24,30 @@ const state = {
     actuatorErrorAt: 0,
     pendingMode: null,
     pendingModeExpires: 0,
+  },
+  auto: {
+    waypoints: [],
+    actualTrack: [],
+    maxTrack: 700,
+    addPinMode: false,
+    followBoat: true,
+    userControllingMap: false,
+    map: null,
+    mapEverShown: false,
+    mapLayoutQueued: false,
+    mapResizeObserver: null,
+    tileErrors: 0,
+    routeLine: null,
+    trackLine: null,
+    boatMarker: null,
+    waypointMarkers: [],
+    waypointKey: "",
+    boatPosition: null,
+    lastFollowAt: 0,
+    fallbackBounds: null,
+    neutralUs: 1500,
+    fullUs: 1650,
+    defaultCenter: { lat: 43.4748, lon: -80.5392 },
   },
 };
 
@@ -51,16 +76,28 @@ tabs.forEach((tab) => {
     views.forEach((item) => item.classList.remove("active"));
     tab.classList.add("active");
     document.getElementById(tab.dataset.tab)?.classList.add("active");
-    requestAnimationFrame(() => drawAll(state.last));
+    requestAnimationFrame(() => {
+      if (tab.dataset.tab === "control" && isAutoSurfaceVisible()) {
+        ensureAutoMap();
+        refreshAutoMapLayout();
+      }
+      drawAll(state.last);
+    });
   });
 });
 
 const wheelCanvas = document.getElementById("manual-wheel");
 const throttleCanvas = document.getElementById("manual-throttle");
-const stopButton = document.getElementById("manual-stop");
+const stopButtons = Array.from(document.querySelectorAll("[data-stop-button]"));
 const springToggle = document.getElementById("manual-spring-toggle");
 const modePills = Array.from(document.querySelectorAll(".mode-pill"));
 const controlSurface = document.querySelector(".control-surface");
+const autoMapFrame = document.querySelector(".mission-map-frame");
+const autoMapCanvas = document.getElementById("auto-map-fallback");
+const autoAddPinButton = document.getElementById("auto-add-pin");
+const autoClearRouteButton = document.getElementById("auto-clear-route");
+const autoFitRouteButton = document.getElementById("auto-fit-route");
+const autoFollowBoatButton = document.getElementById("auto-follow-boat");
 
 // Cache the high-traffic readout nodes so per-pointermove updates don't pay
 // for a querySelector on every event.
@@ -92,7 +129,7 @@ function scheduleLocalRender() {
 }
 
 function isControlEnabled() {
-  return state.control.mode === "manual" && state.control.serverReachable;
+  return state.control.surfaceMode === "manual" && state.control.mode === "manual" && state.control.serverReachable;
 }
 
 function bindManualControls() {
@@ -113,7 +150,9 @@ function bindManualControls() {
     throttleCanvas.addEventListener("keydown", onThrottleKeyDown);
     throttleCanvas.addEventListener("wheel", onThrottleWheel, { passive: false });
   }
-  stopButton?.addEventListener("click", () => stopManualCommand());
+  stopButtons.forEach((button) => {
+    button.addEventListener("click", () => stopManualCommand());
+  });
   springToggle?.addEventListener("click", () => {
     state.control.springReturn = !state.control.springReturn;
     springToggle.setAttribute("aria-pressed", state.control.springReturn ? "true" : "false");
@@ -122,10 +161,412 @@ function bindManualControls() {
   modePills.forEach((pill) => {
     pill.addEventListener("click", () => requestModeChange(pill.dataset.mode));
   });
+  bindAutoMissionControls();
   document.addEventListener("keydown", onGlobalKeyDown);
   renderLocalManualIntent();
   drawWheel();
   drawThrottle();
+}
+
+function bindAutoMissionControls() {
+  loadStoredAutoWaypoints();
+  autoAddPinButton?.addEventListener("click", () => {
+    setAddPinMode(!state.auto.addPinMode);
+  });
+  autoClearRouteButton?.addEventListener("click", () => {
+    state.auto.waypoints = [];
+    persistAutoWaypoints();
+    renderAutoRoute();
+    postAutoWaypoints();
+  });
+  autoFitRouteButton?.addEventListener("click", () => fitAutoMap());
+  autoFollowBoatButton?.addEventListener("click", () => {
+    state.auto.followBoat = !state.auto.followBoat;
+    if (state.auto.followBoat) {
+      state.auto.userControllingMap = false;
+      state.auto.lastFollowAt = 0;
+    }
+    autoFollowBoatButton.setAttribute("aria-pressed", state.auto.followBoat ? "true" : "false");
+    updateAutoHint();
+    if (state.auto.followBoat) renderBoatMarker(true);
+  });
+  autoMapCanvas?.addEventListener("click", (evt) => {
+    if (!state.auto.addPinMode) return;
+    const latlon = fallbackPointToLatLon(evt);
+    if (latlon) addAutoWaypoint(latlon.lat, latlon.lon);
+  });
+}
+
+function isAutoSurfaceVisible() {
+  return controlSurface?.dataset.mode === "auto";
+}
+
+function ensureAutoMap() {
+  if (state.auto.map) {
+    if (autoMapFrame?.dataset.fallback === "true") {
+      autoMapFrame.dataset.fallback = "false";
+      state.auto.tileErrors = 0;
+      refreshAutoMapLayout();
+    }
+    return state.auto.map;
+  }
+  if (!autoMapFrame) return null;
+  const mapNode = document.getElementById("auto-map");
+  if (!mapNode || !window.L) {
+    activateAutoFallback("map offline");
+    return null;
+  }
+  try {
+    const map = window.L.map(mapNode, {
+      zoomControl: false,
+      attributionControl: true,
+      minZoom: 3,
+      maxZoom: 22,
+      zoomDelta: 1,
+      zoomSnap: 1,
+      wheelPxPerZoomLevel: 220,
+      doubleClickZoom: false,
+    }).setView([state.auto.defaultCenter.lat, state.auto.defaultCenter.lon], 17);
+    window.L.control.zoom({ position: "bottomleft", zoomInTitle: "Zoom in", zoomOutTitle: "Zoom out" }).addTo(map);
+    window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxNativeZoom: 19,
+      maxZoom: 22,
+      attribution: "&copy; OpenStreetMap",
+      keepBuffer: 2,
+    }).addTo(map);
+    state.auto.map = map;
+    state.auto.routeLine = window.L.polyline([], { color: "#2a9d8f", weight: 5, opacity: 0.92 }).addTo(map);
+    state.auto.trackLine = window.L.polyline([], { color: "#df7f3f", weight: 4, opacity: 0.78 }).addTo(map);
+    map.on("click", (evt) => {
+      if (state.auto.addPinMode) addAutoWaypoint(evt.latlng.lat, evt.latlng.lng);
+    });
+    map.on("dragstart zoomstart", () => {
+      state.auto.userControllingMap = true;
+      if (state.auto.followBoat) {
+        state.auto.followBoat = false;
+        autoFollowBoatButton?.setAttribute("aria-pressed", "false");
+        updateAutoHint("map free");
+      }
+    });
+    map.on("zoomend", () => {
+      if (autoMapFrame?.dataset.fallback === "true") return;
+      refreshAutoMapLayout();
+    });
+    if (typeof ResizeObserver !== "undefined") {
+      state.auto.mapResizeObserver = new ResizeObserver(() => {
+        if (isAutoSurfaceVisible()) refreshAutoMapLayout();
+      });
+      state.auto.mapResizeObserver.observe(autoMapFrame);
+    }
+    autoMapFrame.dataset.fallback = "false";
+    renderAutoRoute();
+    refreshAutoMapLayout({ fit: true });
+  } catch (error) {
+    activateAutoFallback(`map failed: ${error.message}`);
+    return null;
+  }
+  return state.auto.map;
+}
+
+function refreshAutoMapLayout({ fit = false } = {}) {
+  const map = state.auto.map;
+  if (!map || autoMapFrame?.dataset.fallback === "true" || !isAutoSurfaceVisible()) return;
+  if (state.auto.mapLayoutQueued) return;
+  state.auto.mapLayoutQueued = true;
+  requestAnimationFrame(() => {
+    state.auto.mapLayoutQueued = false;
+    if (!state.auto.map || autoMapFrame?.dataset.fallback === "true") return;
+    map.invalidateSize({ pan: false, animate: false });
+    map.eachLayer((layer) => {
+      if (layer instanceof window.L.TileLayer) {
+        layer.redraw();
+      }
+    });
+    if (fit) fitAutoMap();
+  });
+}
+
+function activateAutoFallback(reason) {
+  if (autoMapFrame) autoMapFrame.dataset.fallback = "true";
+  updateAutoHint(reason);
+  drawAutoFallbackMap();
+}
+
+function setAddPinMode(enabled) {
+  state.auto.addPinMode = enabled;
+  autoAddPinButton?.setAttribute("aria-pressed", enabled ? "true" : "false");
+  updateAutoHint();
+}
+
+function updateAutoHint(extra = "") {
+  const hint = $("#auto-map-hint");
+  if (!hint) return;
+  const pin = state.auto.addPinMode ? "on" : "off";
+  const follow = state.auto.followBoat ? "follow" : "free";
+  hint.textContent = extra ? `${extra} | Add Pin: ${pin} | ${follow}` : `Add Pin: ${pin} | ${follow}`;
+}
+
+function addAutoWaypoint(lat, lon) {
+  const index = state.auto.waypoints.length;
+  state.auto.waypoints.push({
+    lat,
+    lon,
+    label: `WP ${index + 1}`,
+  });
+  persistAutoWaypoints();
+  renderAutoRoute();
+  postAutoWaypoints();
+}
+
+function updateAutoWaypoint(index, lat, lon) {
+  const waypoint = state.auto.waypoints[index];
+  if (!waypoint) return;
+  waypoint.lat = lat;
+  waypoint.lon = lon;
+  persistAutoWaypoints();
+  renderAutoRoute();
+  postAutoWaypoints();
+}
+
+function postAutoWaypoints() {
+  const waypoints = state.auto.waypoints.map((waypoint, index) => ({
+    lat: waypoint.lat,
+    lon: waypoint.lon,
+    label: waypoint.label || `WP ${index + 1}`,
+  }));
+  postJson("/api/control/waypoints", { waypoints })
+    .then(() => {
+      state.control.serverReachable = true;
+      text("#auto-status-reason", waypoints.length ? "route loaded" : "route cleared");
+    })
+    .catch((error) => {
+      state.control.serverReachable = false;
+      text("#auto-status-reason", `route failed: ${error.message}`);
+    });
+}
+
+function persistAutoWaypoints() {
+  try {
+    localStorage.setItem("mtr_auto_waypoints_v1", JSON.stringify(state.auto.waypoints));
+  } catch (_) {}
+}
+
+function loadStoredAutoWaypoints() {
+  try {
+    const raw = localStorage.getItem("mtr_auto_waypoints_v1");
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return;
+    state.auto.waypoints = parsed
+      .map((point, index) => ({
+        lat: Number(point.lat),
+        lon: Number(point.lon),
+        label: point.label || `WP ${index + 1}`,
+      }))
+      .filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lon));
+    if (state.auto.waypoints.length) postAutoWaypoints();
+  } catch (_) {
+    state.auto.waypoints = [];
+  }
+}
+
+function renderAutoRoute(activeIndex = null) {
+  if (isAutoSurfaceVisible()) ensureAutoMap();
+  const route = state.auto.waypoints.map((point) => [point.lat, point.lon]);
+  const track = state.auto.actualTrack.map((point) => [point.lat, point.lon]);
+  if (state.auto.map && autoMapFrame?.dataset.fallback !== "true") {
+    state.auto.routeLine?.setLatLngs(route);
+    state.auto.trackLine?.setLatLngs(track);
+    renderWaypointMarkers(activeIndex);
+    renderBoatMarker();
+  }
+  drawAutoFallbackMap(activeIndex);
+  text("#auto-route-count", `${state.auto.waypoints.length} WP`);
+  text("#auto-track-count", `${state.auto.actualTrack.length}`);
+}
+
+function renderWaypointMarkers(activeIndex = null) {
+  if (!state.auto.map || !window.L) return;
+  const key = state.auto.waypoints
+    .map((point, index) => `${index}:${point.lat.toFixed(7)},${point.lon.toFixed(7)}`)
+    .join("|") + `|active:${activeIndex}`;
+  if (key === state.auto.waypointKey) return;
+  state.auto.waypointKey = key;
+  state.auto.waypointMarkers.forEach((marker) => marker.remove());
+  state.auto.waypointMarkers = state.auto.waypoints.map((point, index) => {
+    const active = index === activeIndex;
+    const icon = window.L.divIcon({
+      className: "",
+      html: `<div class="waypoint-pin${active ? " active" : ""}"><span>${index + 1}</span></div>`,
+      iconSize: [30, 30],
+      iconAnchor: [15, 28],
+    });
+    const marker = window.L.marker([point.lat, point.lon], { icon, draggable: true }).addTo(state.auto.map);
+    marker.on("dragend", () => {
+      const latlng = marker.getLatLng();
+      updateAutoWaypoint(index, latlng.lat, latlng.lng);
+    });
+    marker.on("click", () => {
+      setAddPinMode(false);
+      text("#auto-status-reason", `${point.label || `WP ${index + 1}`} selected`);
+    });
+    return marker;
+  });
+}
+
+function renderBoatMarker(forceFollow = false) {
+  if (!state.auto.map || !window.L || !state.auto.boatPosition) return;
+  const position = state.auto.boatPosition;
+  const heading = num(position.heading) ?? 0;
+  const icon = window.L.divIcon({
+    className: "",
+    html: `<div class="boat-pin" style="transform: rotate(${heading}deg)"></div>`,
+    iconSize: [34, 42],
+    iconAnchor: [17, 24],
+  });
+  if (!state.auto.boatMarker) {
+    state.auto.boatMarker = window.L.marker([position.lat, position.lon], { icon, interactive: false }).addTo(state.auto.map);
+  } else {
+    state.auto.boatMarker.setLatLng([position.lat, position.lon]);
+    state.auto.boatMarker.setIcon(icon);
+  }
+  if (
+    state.auto.followBoat &&
+    !state.auto.userControllingMap &&
+    (forceFollow || performance.now() - state.auto.lastFollowAt > 1200)
+  ) {
+    state.auto.map.panTo([position.lat, position.lon], { animate: !forceFollow, duration: 0.3 });
+    state.auto.lastFollowAt = performance.now();
+  }
+}
+
+function fitAutoMap() {
+  const points = [
+    ...state.auto.waypoints,
+    ...state.auto.actualTrack,
+    ...(state.auto.boatPosition ? [state.auto.boatPosition] : []),
+  ];
+  if (!points.length) return;
+  if (state.auto.map && window.L && autoMapFrame?.dataset.fallback !== "true") {
+    const bounds = window.L.latLngBounds(points.map((point) => [point.lat, point.lon]));
+    state.auto.map.fitBounds(bounds.pad(0.28), { maxZoom: 18 });
+  }
+  drawAutoFallbackMap();
+}
+
+function fallbackBounds() {
+  const points = [
+    ...state.auto.waypoints,
+    ...state.auto.actualTrack,
+    ...(state.auto.boatPosition ? [state.auto.boatPosition] : []),
+  ];
+  const center = points.length ? points[points.length - 1] : state.auto.defaultCenter;
+  const lats = points.length ? points.map((point) => point.lat) : [center.lat - 0.00055, center.lat + 0.00055];
+  const lons = points.length ? points.map((point) => point.lon) : [center.lon - 0.00075, center.lon + 0.00075];
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+  const minLon = Math.min(...lons);
+  const maxLon = Math.max(...lons);
+  const latPad = Math.max(0.00022, (maxLat - minLat) * 0.22);
+  const lonPad = Math.max(0.00030, (maxLon - minLon) * 0.22);
+  const bounds = {
+    minLat: minLat - latPad,
+    maxLat: maxLat + latPad,
+    minLon: minLon - lonPad,
+    maxLon: maxLon + lonPad,
+  };
+  state.auto.fallbackBounds = bounds;
+  return bounds;
+}
+
+function projectFallback(point, bounds, w, h) {
+  const lonSpan = Math.max(bounds.maxLon - bounds.minLon, 0.00001);
+  const latSpan = Math.max(bounds.maxLat - bounds.minLat, 0.00001);
+  return {
+    x: ((point.lon - bounds.minLon) / lonSpan) * w,
+    y: (1 - (point.lat - bounds.minLat) / latSpan) * h,
+  };
+}
+
+function fallbackPointToLatLon(evt) {
+  if (!autoMapCanvas) return null;
+  const rect = autoMapCanvas.getBoundingClientRect();
+  if (rect.width < 2 || rect.height < 2) return null;
+  const bounds = state.auto.fallbackBounds || fallbackBounds();
+  const x = clamp((evt.clientX - rect.left) / rect.width, 0, 1);
+  const y = clamp((evt.clientY - rect.top) / rect.height, 0, 1);
+  return {
+    lat: bounds.maxLat - y * (bounds.maxLat - bounds.minLat),
+    lon: bounds.minLon + x * (bounds.maxLon - bounds.minLon),
+  };
+}
+
+function drawAutoFallbackMap(activeIndex = null) {
+  if (autoMapFrame?.dataset.fallback !== "true") return;
+  const surface = canvasContext("auto-map-fallback");
+  if (!surface) return;
+  const { ctx, w, h } = surface;
+  const bounds = fallbackBounds();
+  clearCanvas(ctx, w, h, "#f8efd7");
+  drawGrid(ctx, w, h, 44, "rgba(42, 157, 143, 0.18)");
+
+  ctx.strokeStyle = colors.line;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(1, 1, w - 2, h - 2);
+
+  drawFallbackPolyline(ctx, state.auto.waypoints, bounds, w, h, colors.teal, 5);
+  drawFallbackPolyline(ctx, state.auto.actualTrack, bounds, w, h, colors.orange, 4);
+
+  state.auto.waypoints.forEach((point, index) => {
+    const p = projectFallback(point, bounds, w, h);
+    ctx.fillStyle = index === activeIndex ? colors.red : colors.yellow;
+    ctx.strokeStyle = colors.ink;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 14, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    drawLabel(ctx, `${index + 1}`, p.x - 4, p.y + 5, index === activeIndex ? "#fffdf4" : colors.ink, 13);
+  });
+
+  if (state.auto.boatPosition) {
+    const p = projectFallback(state.auto.boatPosition, bounds, w, h);
+    drawMapBoat(ctx, p.x, p.y, num(state.auto.boatPosition.heading) ?? 0, 22);
+  } else {
+    drawLabel(ctx, "Waiting for GNSS", 16, 28, colors.muted, 13);
+  }
+}
+
+function drawFallbackPolyline(ctx, points, bounds, w, h, color, width) {
+  if (points.length < 2) return;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  points.forEach((point, index) => {
+    const p = projectFallback(point, bounds, w, h);
+    if (index === 0) ctx.moveTo(p.x, p.y);
+    else ctx.lineTo(p.x, p.y);
+  });
+  ctx.stroke();
+}
+
+function drawMapBoat(ctx, x, y, headingDeg, size) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate((headingDeg * Math.PI) / 180);
+  ctx.fillStyle = colors.ink;
+  ctx.beginPath();
+  ctx.moveTo(0, -size);
+  ctx.lineTo(size * 0.62, size * 0.82);
+  ctx.lineTo(0, size * 0.38);
+  ctx.lineTo(-size * 0.62, size * 0.82);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = colors.yellow;
+  ctx.fillRect(-size * 0.2, -size * 0.02, size * 0.4, size * 0.36);
+  ctx.restore();
 }
 
 function pointerAngleDeg(canvas, evt) {
@@ -278,39 +719,71 @@ function onGlobalKeyDown(evt) {
   }
 }
 
+function releaseManualPointers() {
+  state.control.activePointer = null;
+  state.control.activeThrottlePointer = null;
+}
+
 function requestModeChange(mode) {
-  if (!mode || mode === state.control.mode) return;
+  if (!mode || mode === state.control.surfaceMode) return;
   if (mode !== "manual") {
     resetIntent();
+    releaseManualPointers();
   }
-  state.control.mode = mode;
+  state.control.surfaceMode = mode;
   state.control.pendingMode = mode;
-  state.control.pendingModeExpires = performance.now() + 1500;
+  state.control.pendingModeExpires = performance.now() + 2500;
+  // Drive mode tracks the server immediately for off/manual; auto waits for arm ack.
+  if (mode !== "auto") {
+    state.control.mode = mode;
+  }
   syncModePills();
   renderLocalManualIntent();
+  if (mode === "manual") {
+    sendManualCommand(true);
+  }
   postJson("/api/control/mode", { mode })
-    .then(() => {
+    .then((payload) => {
       state.control.serverReachable = true;
+      if (payload?.mode) {
+        state.control.mode = payload.mode;
+        if (payload.mode === state.control.pendingMode) {
+          state.control.pendingMode = null;
+        }
+      }
     })
     .catch((error) => {
-      state.control.serverReachable = false;
+      state.control.serverReachable = !(error.status === 400);
       state.control.pendingMode = null;
+      if (mode === "auto") {
+        // Keep the mission planner open even when auto arm preconditions fail.
+        state.control.surfaceMode = "auto";
+        syncModePills();
+        text("#auto-status-reason", error.message || "auto arm failed");
+      }
       setReason(`mode change failed: ${error.message}`, "error");
     });
 }
 
 function syncModePills() {
+  const displayMode = state.control.surfaceMode;
   modePills.forEach((pill) => {
-    const active = pill.dataset.mode === state.control.mode;
+    const active = pill.dataset.mode === displayMode;
     pill.setAttribute("aria-checked", active ? "true" : "false");
   });
-  controlSurface?.setAttribute("data-mode", state.control.mode);
+  controlSurface?.setAttribute("data-mode", displayMode);
+  if (displayMode === "auto") {
+    ensureAutoMap();
+    const fit = !state.auto.mapEverShown;
+    state.auto.mapEverShown = true;
+    refreshAutoMapLayout({ fit });
+  }
   const banner = $("#manual-banner");
   if (banner) {
-    if (state.control.mode === "auto") {
+    if (displayMode === "auto") {
       banner.hidden = false;
-      banner.dataset.tone = "warn";
-      banner.textContent = "Auto mode is a stub. Waypoints not yet implemented; output stays neutral.";
+      banner.dataset.tone = "info";
+      banner.textContent = "Auto mode selected; waiting for route status.";
     } else {
       banner.hidden = true;
       banner.removeAttribute("data-tone");
@@ -390,6 +863,31 @@ function pushBounded(list, value, maxLength) {
   if (list.length > maxLength) list.splice(0, list.length - maxLength);
 }
 
+function geoDistanceM(a, b) {
+  const lat1 = (a.lat * Math.PI) / 180;
+  const lat2 = (b.lat * Math.PI) / 180;
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLon = ((b.lon - a.lon) * Math.PI) / 180;
+  const h =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  return 6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+function appendAutoTrack(point) {
+  const last = state.auto.actualTrack[state.auto.actualTrack.length - 1];
+  state.auto.boatPosition = point;
+  if (last) {
+    const distance = geoDistanceM(last, point);
+    if (distance > 75) {
+      updateAutoHint("GNSS jump ignored");
+      return;
+    }
+    if (distance < 0.5) return;
+  }
+  pushBounded(state.auto.actualTrack, point, state.auto.maxTrack);
+}
+
 function getPoints(mmwave) {
   return mmwave?.points || mmwave?.filtered_points || [];
 }
@@ -459,13 +957,15 @@ async function postJson(path, payload = {}) {
       const body = await response.json();
       if (body?.error) detail = body.error;
     } catch (_) {}
-    throw new Error(detail);
+    const error = new Error(detail);
+    error.status = response.status;
+    throw error;
   }
   return response.json();
 }
 
 function sendManualCommand(force = false) {
-  if (state.control.mode !== "manual") return;
+  if (state.control.surfaceMode !== "manual" || state.control.mode !== "manual") return;
   const now = performance.now();
   if (!force && now - state.control.lastSentAt < 45) return;
   state.control.lastSentAt = now;
@@ -484,16 +984,18 @@ function sendManualCommand(force = false) {
 }
 
 function stopManualCommand() {
+  state.control.surfaceMode = "off";
   state.control.mode = "off";
   state.control.pendingMode = "off";
   state.control.pendingModeExpires = performance.now() + 2000;
+  releaseManualPointers();
   resetIntent();
   syncModePills();
   renderLocalManualIntent();
-  if (stopButton) {
-    stopButton.dataset.pressed = "true";
-    setTimeout(() => stopButton.removeAttribute("data-pressed"), 700);
-  }
+  stopButtons.forEach((button) => {
+    button.dataset.pressed = "true";
+    setTimeout(() => button.removeAttribute("data-pressed"), 700);
+  });
   startStopRetry();
 }
 
@@ -538,6 +1040,8 @@ function updateHistory(data) {
   if (mmHealth === "live" && throttle !== null) pushBounded(state.throttle, throttle, state.maxTrace);
   if (imuHealth === "live" && accel !== null) pushBounded(state.accel, accel, state.maxTrace);
   if (gnssHealth === "live" && lat !== null && lon !== null && data?.gnss?.fix !== "none") {
+    const point = { lat, lon, heading: num(data?.gnss?.heading_deg), ts: num(data?.timestamp) };
+    appendAutoTrack(point);
     const last = state.gnss[state.gnss.length - 1];
     if (!last || Math.abs(last.lat - lat) > 0.0000001 || Math.abs(last.lon - lon) > 0.0000001) {
       pushBounded(state.gnss, { lat, lon, heading: num(data?.gnss?.heading_deg) }, state.maxTrack);
@@ -552,7 +1056,7 @@ function updateDom(data) {
   const mmwave = data.mmwave || {};
   const gnss = data.gnss || {};
   const imu = data.imu || {};
-  const manual = data.manual_control || {};
+  const manual = data.control || {};
   const manualOutput = manual.output || {};
   const manualInput = manual.input || {};
   const control = mmwave.control || {};
@@ -659,6 +1163,7 @@ function updateDom(data) {
   if (manual.mode && state.control.pendingMode) {
     if (manual.mode === state.control.pendingMode) {
       state.control.pendingMode = null;
+      state.control.mode = manual.mode;
     } else if (performance.now() > state.control.pendingModeExpires) {
       state.control.pendingMode = null;
     }
@@ -672,7 +1177,6 @@ function updateDom(data) {
   ) {
     if (state.control.mode !== manual.mode) {
       state.control.mode = manual.mode;
-      syncModePills();
     }
   }
   const readoutMode = state.control.pendingMode || manual.mode || state.control.mode || "off";
@@ -691,6 +1195,7 @@ function updateDom(data) {
   }
   updateStaleness(manual);
   updateActuatorBanner(manual);
+  updateAutoMission(data, manual, { mmHealth, gnssHealth, imuHealth });
 }
 
 function updateStaleness(manual) {
@@ -720,7 +1225,16 @@ function updateActuatorBanner(manual) {
   const banner = $("#manual-banner");
   if (!banner) return;
   const actuator = typeof manual?.actuator === "string" ? manual.actuator : null;
-  if (state.control.mode === "auto") {
+  if (state.control.surfaceMode === "auto") {
+    const status = manual?.auto_status || {};
+    banner.hidden = false;
+    banner.dataset.tone = status.state === "blocked" ? "error" : "info";
+    const distance = num(status.distance_m);
+    const error = num(status.heading_error_deg);
+    const parts = [status.reason || "auto armed"];
+    if (distance !== null) parts.push(`${distance.toFixed(1)} m`);
+    if (error !== null) parts.push(`${error >= 0 ? "+" : ""}${error.toFixed(1)} deg`);
+    banner.textContent = parts.join(" | ");
     return;
   }
   if (actuator === "error") {
@@ -732,6 +1246,96 @@ function updateActuatorBanner(manual) {
     banner.removeAttribute("data-tone");
     banner.textContent = "";
   }
+}
+
+function updateAutoMission(data, control, health) {
+  const status = control?.auto_status || {};
+  const output = control?.effective || {};
+  const activeIndex = Number.isInteger(status.active_index) ? status.active_index : null;
+  const leftUs = num(output.left_us) ?? state.auto.neutralUs;
+  const rightUs = num(output.right_us) ?? state.auto.neutralUs;
+  const action = status?.control?.action || status.state || control?.mode || "off";
+  const reason = status.reason || control?.reason || "waiting for auto command";
+  const actuator = typeof control?.actuator === "string" ? control.actuator : "";
+  const actuatorHealth = actuator.includes("live") ? "live" : actuator.includes("error") ? "error" : "waiting";
+
+  setLabeledHealth("#auto-health-gnss", "GNSS", health.gnssHealth);
+  setLabeledHealth("#auto-health-imu", "IMU", health.imuHealth);
+  setLabeledHealth("#auto-health-radar", "Radar", health.mmHealth);
+  setLabeledHealth("#auto-health-actuator", "ESP32", actuatorHealth);
+  text("#auto-status-reason", reason);
+  text("#auto-active-wp", activeIndex === null || !status.total ? "--" : `${activeIndex + 1}/${status.total}`);
+  text("#auto-distance", fmt(status.distance_m, 1, " m"));
+  text("#auto-heading-error", fmtSigned(status.heading_error_deg, 1, " deg"));
+  text("#auto-output-action", String(action).replaceAll("_", " "));
+  text("#auto-output-reason", reason);
+  text("#auto-left-pwm", fmtInt(leftUs));
+  text("#auto-right-pwm", fmtInt(rightUs));
+  text("#auto-drive-percent", `${Math.round(autoDrivePercent(leftUs, rightUs))}%`);
+
+  renderAutoRoute(activeIndex);
+  drawAutoMiniWheel(leftUs, rightUs, action);
+}
+
+function fmtSigned(value, digits = 1, suffix = "") {
+  const n = num(value);
+  if (n === null) return "--";
+  return `${n >= 0 ? "+" : ""}${n.toFixed(digits)}${suffix}`;
+}
+
+function setLabeledHealth(selector, label, health) {
+  const node = $(selector);
+  if (!node) return;
+  node.dataset.health = health || "unavailable";
+  node.textContent = `${label} ${health || "unavailable"}`;
+}
+
+function autoDrivePercent(leftUs, rightUs) {
+  const span = Math.max(1, state.auto.fullUs - state.auto.neutralUs);
+  const left = Math.max(0, leftUs - state.auto.neutralUs) / span;
+  const right = Math.max(0, rightUs - state.auto.neutralUs) / span;
+  return clamp(((left + right) / 2) * 100, 0, 100);
+}
+
+function drawAutoMiniWheel(leftUs, rightUs, action) {
+  const surface = canvasContext("auto-mini-wheel");
+  if (!surface) return;
+  const { ctx, w, h } = surface;
+  const cx = w / 2;
+  const cy = h / 2;
+  const r = Math.min(w, h) / 2 - 13;
+  const span = Math.max(1, state.auto.fullUs - state.auto.neutralUs);
+  const steering = clamp((leftUs - rightUs) / span, -1, 1);
+  const drive = clamp(((leftUs + rightUs) / 2 - state.auto.neutralUs) / span, 0, 1);
+
+  clearCanvas(ctx, w, h, "#fff7df");
+  ctx.strokeStyle = colors.line;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(steering * 0.85);
+  ctx.lineWidth = 8;
+  ctx.lineCap = "round";
+  ctx.strokeStyle = drive > 0 ? colors.ink : colors.dead;
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.66, 0);
+  ctx.lineTo(r * 0.66, 0);
+  ctx.moveTo(0, -r * 0.66);
+  ctx.lineTo(0, r * 0.66);
+  ctx.stroke();
+  ctx.fillStyle = drive > 0 ? colors.yellow : "#e5d9b5";
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 0.24, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.fillStyle = colors.teal;
+  ctx.fillRect(12, h - 17, Math.max(0, w - 24) * drive, 6);
+  drawLabel(ctx, String(action || "off").replaceAll("_", " ").toUpperCase(), 12, 18, colors.muted, 10);
 }
 
 function setZone(selector, value) {
@@ -768,7 +1372,12 @@ function canvasContext(id) {
   return { canvas, ctx, w: cssWidth, h: cssHeight };
 }
 
-window.addEventListener("resize", () => requestAnimationFrame(() => drawAll(state.last)));
+window.addEventListener("resize", () => {
+  requestAnimationFrame(() => {
+    if (isAutoSurfaceVisible()) refreshAutoMapLayout();
+    drawAll(state.last);
+  });
+});
 
 function clearCanvas(ctx, w, h, color = colors.bg) {
   ctx.fillStyle = color;
@@ -1232,6 +1841,11 @@ function drawAll(data) {
   drawWheel();
   drawThrottle();
   if (!data) return;
+  const control = data?.control || {};
+  const output = control?.effective || {};
+  const status = control?.auto_status || {};
+  drawAutoFallbackMap(Number.isInteger(status.active_index) ? status.active_index : null);
+  drawAutoMiniWheel(num(output.left_us) ?? state.auto.neutralUs, num(output.right_us) ?? state.auto.neutralUs, status?.control?.action || status.state || "off");
   drawRadar("radar-overview", data, false);
   drawRadar("radar-detail", data, true);
   drawPosition("position-overview", data, true);
