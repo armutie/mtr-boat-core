@@ -1464,6 +1464,7 @@ def main() -> None:
         gnss_reanchor_speed_mps=float(auto_config.get("gnss_reanchor_speed_mps", 0.3)),
         gnss_heading_blend=float(auto_config.get("gnss_heading_blend", 0.08)),
         gnss_stale_s=float(auto_config.get("gnss_stale_s", 3.0)),
+        route_match_tolerance_m=float(auto_config.get("route_match_tolerance_m", 1.0)),
         imu_stale_s=float(auto_config.get("imu_stale_s", 2.0)),
         heading_deadband_deg=float(auto_config.get("heading_deadband_deg", 8.0)),
         yaw_rate_deadband_dps=float(auto_config.get("yaw_rate_deadband_dps", 2.0)),

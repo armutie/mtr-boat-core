@@ -59,6 +59,7 @@
     "min_speed_for_course_mps": 0.08,
     "gnss_reanchor_speed_mps": 0.3,
     "gnss_heading_blend": 0.08,
+    "route_match_tolerance_m": 1.0,
     "gnss_stale_s": 3.0
   }
 }

@@ -16,6 +16,7 @@ class AutoConfig:
     gnss_reanchor_speed_mps: float = 0.3
     gnss_heading_blend: float = 0.08
     gnss_stale_s: float = 3.0
+    route_match_tolerance_m: float = 1.0
     imu_stale_s: float = 2.0
     heading_deadband_deg: float = 8.0
     yaw_rate_deadband_dps: float = 2.0
@@ -64,10 +65,12 @@ class AutoController:
 
     def set_waypoints(self, records: list[dict]) -> dict:
         waypoints = [self._coerce_waypoint(record, index) for index, record in enumerate(records)]
+        with self._lock:
+            active_index = self._next_active_index_for_route_update(waypoints)
         status = {
             "state": "idle",
             "reason": "route loaded" if waypoints else "route cleared",
-            "active_index": 0,
+            "active_index": active_index,
             "total": len(waypoints),
             "target": None,
             "distance_m": None,
@@ -79,7 +82,7 @@ class AutoController:
         }
         with self._lock:
             self._waypoints = waypoints
-            self._active_index = 0
+            self._active_index = active_index
             self._status = status
             self._clear_pulse_state()
         self.control_state.set_auto_status(self.status())
@@ -91,6 +94,22 @@ class AutoController:
     def status(self) -> dict:
         with self._lock:
             return dict(self._status)
+
+    def _next_active_index_for_route_update(self, new_waypoints: list[GeoWaypoint]) -> int:
+        if not new_waypoints:
+            return 0
+        current_index = min(max(self._active_index, 0), len(new_waypoints))
+        if not self._waypoints:
+            return 0
+        if current_index > len(self._waypoints):
+            return 0
+        for index in range(min(current_index, len(self._waypoints))):
+            if not self._same_waypoint(self._waypoints[index], new_waypoints[index]):
+                return 0
+        if current_index < len(self._waypoints) and current_index < len(new_waypoints):
+            if not self._same_waypoint(self._waypoints[current_index], new_waypoints[current_index]):
+                return 0
+        return current_index
 
     def can_arm(self) -> tuple[bool, str]:
         with self._lock:
@@ -574,3 +593,6 @@ class AutoController:
             raise ValueError("waypoint lon must be -180..180")
         label = str(record.get("label") or f"WP {index + 1}")
         return GeoWaypoint(lat=lat, lon=lon, label=label)
+
+    def _same_waypoint(self, left: GeoWaypoint, right: GeoWaypoint) -> bool:
+        return distance_m(left.lat, left.lon, right.lat, right.lon) <= self.config.route_match_tolerance_m
