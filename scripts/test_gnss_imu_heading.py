@@ -22,6 +22,10 @@ from gnss.geo import bearing_deg, distance_m, normalize_angle_deg
 from imu import GyroBias, Mpu6050, RelativeYawTracker
 
 
+LINUX_TTY_CANDIDATES = [f"/dev/ttyACM{i}" for i in range(3)] + [f"/dev/ttyUSB{i}" for i in range(3)]
+WINDOWS_COM_CANDIDATES = [f"COM{i}" for i in range(1, 13)]
+
+
 DEFAULT_PHASES = (
     ("still_start", 45.0, "Keep the package still."),
     ("straight_walk_1", 45.0, "Walk straight at a normal pace."),
@@ -50,6 +54,58 @@ def load_config(args) -> None:
     args.gnss_baud = choose(args.gnss_baud, gnss, "baud", 38400)
     args.imu_bus = choose(args.imu_bus, imu, "bus", 2)
     args.imu_address = parse_address(choose(args.imu_address, imu, "address", "0x68"))
+
+
+def platform_gnss_candidates(preferred: str | None) -> list[str]:
+    fallback = WINDOWS_COM_CANDIDATES if sys.platform.startswith("win") else LINUX_TTY_CANDIDATES
+    seen = set()
+    candidates = []
+    for port in [preferred, *fallback]:
+        if not port or port in seen:
+            continue
+        seen.add(port)
+        if sys.platform.startswith("win") or Path(port).exists():
+            candidates.append(port)
+    return candidates
+
+
+def probe_gnss_port(port: str, baud: int, probe_s: float = 2.0) -> tuple[bool, str]:
+    try:
+        with NmeaReader(port, baud=baud, timeout=0.4) as reader:
+            deadline = time.time() + probe_s
+            while time.time() < deadline:
+                fix = reader.read_fix()
+                if fix is not None:
+                    return True, f"NMEA {fix.raw[:18]}"
+        return False, "opened but no NMEA"
+    except Exception as exc:
+        return False, str(exc)
+
+
+def choose_gnss_port(preferred: str | None, baud: int) -> tuple[str, list[str]]:
+    candidates = platform_gnss_candidates(preferred)
+    if not candidates:
+        raise SystemExit("No GNSS serial candidates found. Checked configured port plus /dev/ttyACM0..2 and /dev/ttyUSB0..2.")
+
+    opened_without_nmea: str | None = None
+    errors = []
+    print(f"[HEADING TEST] GNSS candidates: {candidates}")
+    for port in candidates:
+        ok, detail = probe_gnss_port(port, baud)
+        if ok:
+            if port != preferred:
+                print(f"[HEADING TEST] GNSS auto-selected {port}")
+            return port, candidates
+        print(f"[HEADING TEST] GNSS probe skipped {port}: {detail}")
+        errors.append(f"{port}: {detail}")
+        if "opened but no NMEA" in detail and opened_without_nmea is None:
+            opened_without_nmea = port
+
+    if opened_without_nmea is not None:
+        print(f"[HEADING TEST] No port produced NMEA during probe; using opened port {opened_without_nmea} anyway.")
+        return opened_without_nmea, candidates
+
+    raise SystemExit("Unable to open any GNSS candidate: " + "; ".join(errors))
 
 
 class GnssThread:
@@ -91,19 +147,33 @@ class GnssThread:
                     fix = reader.read_fix()
                     if fix is None:
                         continue
+                    record = fix.to_record()
                     with self._lock:
-                        self.latest = fix.to_record()
+                        self.latest = self._merge_fix(record)
                         self.count += 1
                         self.error = None
         except Exception as exc:
             with self._lock:
                 self.error = str(exc)
 
+    def _merge_fix(self, record: dict) -> dict:
+        latest = dict(self.latest) if self.latest is not None else {}
+        for key in ("lat", "lon", "speed_mps", "heading_deg", "altitude_m", "satellites", "hdop"):
+            value = record.get(key)
+            if value is not None:
+                if key in ("lat", "lon") and record.get("fix") == "none" and value == 0:
+                    continue
+                latest[key] = value
+        latest["timestamp"] = record.get("timestamp")
+        latest["source"] = record.get("source") or self.port
+        latest["fix"] = record.get("fix") or latest.get("fix") or "none"
+        latest["raw"] = record.get("raw", "")
+        return latest
+
 
 def run_record(args) -> None:
     load_config(args)
-    if not args.gnss_port:
-        raise SystemExit("--gnss-port is required unless set in config")
+    args.gnss_port, gnss_candidates = choose_gnss_port(args.gnss_port, args.gnss_baud)
 
     log_path = Path(args.log_path) if args.log_path else default_log_path()
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -111,6 +181,7 @@ def run_record(args) -> None:
     phases = DEFAULT_PHASES if not args.quick else tuple((name, min(duration, 15.0), prompt) for name, duration, prompt in DEFAULT_PHASES)
 
     print(f"[HEADING TEST] GNSS {args.gnss_port} @ {args.gnss_baud}")
+    print(f"[HEADING TEST] GNSS candidates tried: {gnss_candidates}")
     print(f"[HEADING TEST] IMU I2C bus {args.imu_bus}, address 0x{args.imu_address:02x}")
     print(f"[HEADING TEST] Logging to {log_path}")
     print("[HEADING TEST] Keep the package still during gyro calibration.")

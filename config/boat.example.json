@@ -50,7 +50,9 @@
     "yaw_rate_deadband_dps": 2.0,
     "yaw_lookahead_s": 1.2,
     "imu_stale_s": 2.0,
-    "min_speed_for_course_mps": 0.3,
+    "min_speed_for_course_mps": 0.08,
+    "gnss_reanchor_speed_mps": 0.3,
+    "gnss_heading_blend": 0.08,
     "gnss_stale_s": 3.0
   }
 }

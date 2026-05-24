@@ -4,14 +4,16 @@ import threading
 import time
 from dataclasses import asdict, dataclass, field
 
-from gnss.geo import bearing_deg, distance_m, heading_error_deg
+from gnss.geo import bearing_deg, distance_m, heading_error_deg, normalize_angle_deg
 from radar_nav.waypoint import GeoWaypoint, WaypointControl, WaypointNavConfig
 
 
 @dataclass
 class AutoConfig:
     control_hz: float = 10.0
-    min_speed_for_course_mps: float = 0.3
+    min_speed_for_course_mps: float = 0.08
+    gnss_reanchor_speed_mps: float = 0.3
+    gnss_heading_blend: float = 0.08
     gnss_stale_s: float = 3.0
     imu_stale_s: float = 2.0
     heading_deadband_deg: float = 8.0
@@ -34,6 +36,11 @@ class AutoController:
         self._waypoints: list[GeoWaypoint] = []
         self._active_index = 0
         self._status = self._base_status("idle", "no route")
+        self._heading_deg: float | None = None
+        self._heading_anchor_deg: float | None = None
+        self._heading_anchor_imu_yaw_deg: float | None = None
+        self._heading_source = "uninitialized"
+        self._heading_confidence = "none"
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
@@ -81,8 +88,6 @@ class AutoController:
         ok, reason = self._valid_gnss(health, gnss)
         if not ok:
             return False, reason
-        if not self._heading_available(gnss):
-            return False, "auto requires GNSS course at moving speed"
         return True, "auto ready"
 
     def _run(self) -> None:
@@ -94,21 +99,20 @@ class AutoController:
     def _tick(self) -> None:
         with self.control_state._lock:  # noqa: SLF001 - dashboard-local coordination
             mode = self.control_state.mode
+        health, gnss = self._gnss_snapshot()
+        imu_health, imu = self._imu_snapshot()
+        gnss_ok, gnss_reason = self._valid_gnss(health, gnss)
+        estimate = self._update_heading_estimate(gnss, imu_health, imu)
+
         if mode != "auto":
-            self._set_status(self._base_status("idle", "auto not armed"))
+            status = self._base_status("idle", "auto not armed")
+            status["heading"] = estimate
+            self._set_status(status)
             self.control_state.set_auto_status(self.status())
             return
 
-        health, gnss = self._gnss_snapshot()
-        ok, reason = self._valid_gnss(health, gnss)
-        if not ok:
-            self._block(reason)
-            return
-        imu_health, imu = self._imu_snapshot()
-
-        heading = self._resolve_heading(gnss)
-        if heading is None:
-            self._block("heading unavailable or too slow for GNSS course")
+        if not gnss_ok:
+            self._block(gnss_reason)
             return
 
         with self._lock:
@@ -128,6 +132,36 @@ class AutoController:
 
         dist = distance_m(float(gnss["lat"]), float(gnss["lon"]), waypoint.lat, waypoint.lon)
         bearing = bearing_deg(float(gnss["lat"]), float(gnss["lon"]), waypoint.lat, waypoint.lon)
+
+        heading = estimate["heading_deg"]
+        if heading is None:
+            status = self._status_for(
+                "acquiring_heading",
+                "acquiring heading with level 1 forward",
+                waypoint,
+                active_index,
+                total,
+                dist,
+                bearing,
+                None,
+                None,
+                {
+                    "action": "acquire_heading",
+                    "left_us": self.config.level1_us,
+                    "right_us": self.config.level1_us,
+                    "level": 1,
+                    "heading": estimate,
+                },
+            )
+            self._set_status(status)
+            self.control_state.apply_auto_pwm(
+                self.config.level1_us,
+                self.config.level1_us,
+                status["reason"],
+                status,
+            )
+            return
+
         error = heading_error_deg(heading, bearing)
         control = self._compute_guesstimate_control(dist, error, imu_health, imu)
 
@@ -137,6 +171,7 @@ class AutoController:
                 done = self._active_index >= len(self._waypoints)
             if done:
                 status = self._status_for("reached", "route complete", waypoint, active_index, total, dist, bearing, error, heading)
+                status["heading"] = estimate
                 self._set_status(status)
                 self.control_state.apply_auto_pwm(self.config.neutral_us, self.config.neutral_us, "route complete", status)
             else:
@@ -155,6 +190,7 @@ class AutoController:
             heading,
             control.metadata,
         )
+        status["heading"] = estimate
         self._set_status(status)
         self.control_state.apply_auto_pwm(control.left_us, control.right_us, status["reason"], status)
 
@@ -185,17 +221,74 @@ class AutoController:
             return False, "GNSS stale"
         return True, "GNSS ok"
 
-    def _heading_available(self, gnss: dict) -> bool:
-        return self._resolve_heading(gnss) is not None
-
-    def _resolve_heading(self, gnss: dict) -> float | None:
+    def _resolve_gnss_heading(self, gnss: dict) -> tuple[float | None, float | None]:
         heading = gnss.get("heading_deg")
-        if heading is None:
-            return None
         speed = gnss.get("speed_mps")
-        if speed is None or float(speed) < self.config.min_speed_for_course_mps:
+        speed_f = None if speed is None else float(speed)
+        if heading is None:
+            return None, speed_f
+        if speed_f is None or speed_f < self.config.min_speed_for_course_mps:
+            return None, speed_f
+        return float(heading) % 360.0, speed_f
+
+    def _valid_imu_yaw(self, health: str, imu: dict) -> float | None:
+        if health != "live":
             return None
-        return float(heading) % 360.0
+        age = imu.get("age_s")
+        if age is not None and float(age) > self.config.imu_stale_s:
+            return None
+        yaw = imu.get("yaw_relative_deg")
+        if yaw is None:
+            return None
+        return float(yaw)
+
+    def _update_heading_estimate(self, gnss: dict, imu_health: str, imu: dict) -> dict:
+        gnss_heading, speed = self._resolve_gnss_heading(gnss)
+        imu_yaw = self._valid_imu_yaw(imu_health, imu)
+
+        if self._heading_deg is not None and imu_yaw is not None:
+            if self._heading_anchor_deg is None or self._heading_anchor_imu_yaw_deg is None:
+                self._heading_anchor_deg = self._heading_deg
+                self._heading_anchor_imu_yaw_deg = imu_yaw
+            yaw_delta = normalize_angle_deg(imu_yaw - self._heading_anchor_imu_yaw_deg)
+            self._heading_deg = (self._heading_anchor_deg + yaw_delta) % 360.0
+            self._heading_source = "imu"
+            self._heading_confidence = "imu"
+
+        if gnss_heading is not None and self._heading_deg is None:
+            self._heading_deg = gnss_heading
+            self._heading_anchor_deg = gnss_heading
+            self._heading_anchor_imu_yaw_deg = imu_yaw
+            self._heading_source = "gnss_init"
+            self._heading_confidence = "initialized"
+        elif gnss_heading is not None and speed is not None and speed >= self.config.gnss_reanchor_speed_mps:
+            if (
+                imu_yaw is not None
+                and self._heading_anchor_deg is not None
+                and self._heading_anchor_imu_yaw_deg is not None
+            ):
+                error = normalize_angle_deg(gnss_heading - self._heading_deg)
+                blend = max(0.0, min(1.0, self.config.gnss_heading_blend))
+                self._heading_anchor_deg = (self._heading_anchor_deg + error * blend) % 360.0
+                yaw_delta = normalize_angle_deg(imu_yaw - self._heading_anchor_imu_yaw_deg)
+                self._heading_deg = (self._heading_anchor_deg + yaw_delta) % 360.0
+                self._heading_source = "imu_gnss_synced"
+                self._heading_confidence = "anchored"
+            else:
+                self._heading_deg = gnss_heading
+                self._heading_anchor_deg = gnss_heading
+                self._heading_anchor_imu_yaw_deg = imu_yaw
+                self._heading_source = "gnss"
+                self._heading_confidence = "gnss"
+
+        return {
+            "heading_deg": None if self._heading_deg is None else round(self._heading_deg, 2),
+            "source": self._heading_source,
+            "confidence": self._heading_confidence,
+            "gnss_heading_deg": None if gnss_heading is None else round(gnss_heading, 2),
+            "speed_mps": None if speed is None else round(speed, 3),
+            "imu_yaw_relative_deg": None if imu_yaw is None else round(imu_yaw, 2),
+        }
 
     def _valid_imu_yaw_rate(self, health: str, imu: dict) -> float | None:
         if health != "live":
@@ -341,8 +434,8 @@ class AutoController:
             "target": asdict(waypoint),
             "distance_m": round(dist, 2),
             "bearing_deg": round(bearing, 1),
-            "heading_deg": round(heading, 1),
-            "heading_error_deg": round(error, 1),
+            "heading_deg": None if heading is None else round(heading, 1),
+            "heading_error_deg": None if error is None else round(error, 1),
             "control": control_metadata or {},
             "control_hz": self.config.control_hz,
         }
