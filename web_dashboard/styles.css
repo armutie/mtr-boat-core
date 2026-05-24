@@ -1380,6 +1380,148 @@ pre {
   }
 }
 
+@media (max-width: 980px) and (orientation: landscape) and (max-height: 560px) {
+  .deck {
+    padding: 8px;
+  }
+
+  .topbar {
+    grid-template-columns: 150px minmax(0, 1fr) 170px;
+    grid-template-rows: 1fr;
+    height: 50px;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+
+  .brand {
+    padding: 6px 8px;
+  }
+
+  .brand .kicker,
+  .stream-card span {
+    display: none;
+  }
+
+  h1 {
+    font-size: 19px;
+  }
+
+  .tabs {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 4px;
+    padding: 4px;
+  }
+
+  .tab {
+    min-width: 0;
+    padding: 4px 2px;
+    font-size: 11px;
+  }
+
+  .stream-card {
+    grid-template-columns: 18px minmax(0, 1fr);
+    gap: 6px;
+    padding: 6px;
+  }
+
+  .status-dot {
+    width: 15px;
+    height: 15px;
+  }
+
+  .stream-card strong {
+    font-size: 12px;
+  }
+
+  .control-surface:not([data-mode="auto"]) {
+    grid-template-columns: minmax(210px, 1fr) minmax(180px, 230px) minmax(130px, 0.72fr);
+    gap: 8px;
+    min-height: calc(100svh - 66px);
+    align-items: stretch;
+  }
+
+  .control-surface:not([data-mode="auto"]) .drive-zone {
+    grid-template-rows: 36px minmax(0, 1fr) 16px auto;
+    gap: 6px;
+    padding-top: 2px;
+  }
+
+  .control-surface:not([data-mode="auto"]) .drive-command {
+    grid-template-rows: 32px auto auto auto auto auto auto;
+    gap: 6px;
+    padding-top: 2px;
+  }
+
+  .drive-head {
+    min-height: 32px;
+    gap: 6px;
+  }
+
+  .drive-head h2 {
+    font-size: 18px;
+  }
+
+  .control-value {
+    font-size: 22px;
+  }
+
+  .wheel-wrap,
+  .throttle-wrap {
+    min-height: 0;
+    height: min(51svh, 235px);
+  }
+
+  #manual-wheel {
+    width: min(100%, 235px);
+    height: min(100%, 235px);
+  }
+
+  #manual-throttle {
+    width: min(132px, 72%);
+    max-height: 235px;
+  }
+
+  .magnitude-bar,
+  .throttle-bar {
+    height: 14px;
+  }
+
+  .control-readouts,
+  .control-readouts.stacked {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px;
+    font-size: 10px;
+  }
+
+  .mode-switch {
+    gap: 4px;
+    padding: 4px;
+    border-width: 2px;
+  }
+
+  .mode-pill {
+    min-height: 36px;
+    padding: 6px 4px;
+    font-size: 12px;
+  }
+
+  .stop-button {
+    min-height: 74px;
+    font-size: 28px;
+  }
+
+  .command-stack {
+    gap: 4px;
+    font-size: 10px;
+  }
+
+  .control-reason,
+  .manual-banner {
+    font-size: 11px;
+    line-height: 1.2;
+  }
+}
+
 @media (max-width: 620px) {
   .tabs {
     grid-template-columns: repeat(3, 1fr);
