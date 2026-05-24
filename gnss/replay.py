@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import json
-import math
 from dataclasses import dataclass, fields
 from pathlib import Path
 
+from .geo import EARTH_RADIUS_M, distance_m
 from .nmea import GnssFix
 
 
 GNSS_FIX_FIELDS = {field.name for field in fields(GnssFix)}
-EARTH_RADIUS_M = 6_371_000.0
 
 
 @dataclass
@@ -56,15 +55,6 @@ def load_gnss_log(path: str | Path) -> list[GnssFix]:
             fixes.append(GnssFix(**fix_record))
     fixes.sort(key=lambda fix: fix.timestamp)
     return fixes
-
-
-def distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    phi1 = math.radians(lat1)
-    phi2 = math.radians(lat2)
-    d_phi = math.radians(lat2 - lat1)
-    d_lambda = math.radians(lon2 - lon1)
-    a = math.sin(d_phi / 2.0) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2.0) ** 2
-    return 2.0 * EARTH_RADIUS_M * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
 
 
 def positioned_fixes(fixes: list[GnssFix]) -> list[GnssFix]:
