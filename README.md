@@ -123,6 +123,92 @@ If `config/boat.local.json` does not exist, these commands fall back to
 `config/boat.example.json`, but that is only a template. For the real boat, copy
 the example and set the actual ports.
 
+## Field Startup Over Hotspot/WiFi
+
+Use this when you want the laptop/phone dashboard to talk to the Orange Pi over
+the same hotspot or WiFi network.
+
+1. Turn on the hotspot or WiFi network.
+2. Connect the laptop to that network.
+3. Connect the Orange Pi to that network. If needed, plug in a monitor and
+   keyboard, log in, and connect WiFi from the desktop/network menu.
+4. On the Orange Pi monitor, find its WiFi IP:
+
+```bash
+ip addr
+```
+
+Look for the `wlan0` address. It will look like `192.168.x.x`. After you have
+the IP, the monitor/keyboard are no longer needed.
+
+5. From the laptop, SSH into the Orange Pi:
+
+```bash
+ssh uwmtr@ORANGE_PI_WIFI_IP
+```
+
+Example:
+
+```bash
+ssh uwmtr@192.168.50.23
+```
+
+6. Start the dashboard inside `tmux` so it keeps running if SSH or Ethernet
+   disconnects:
+
+```bash
+cd ~/mtr-boat-core
+tmux new -s boat
+python3 web_dashboard/server.py --no-mmwave --log
+```
+
+For dry-run testing without sending ESP32 motor commands:
+
+```bash
+python3 web_dashboard/server.py --no-mmwave --actuator-dry-run --log
+```
+
+For live thruster testing:
+
+```bash
+python3 web_dashboard/server.py --no-mmwave --actuator-live --log
+```
+
+7. Open the dashboard from the laptop or phone on the same network:
+
+```text
+http://ORANGE_PI_WIFI_IP:8080
+```
+
+8. Detach from `tmux` without stopping the server:
+
+```text
+Ctrl+B
+D
+```
+
+9. Reconnect to the running server output later:
+
+```bash
+ssh uwmtr@ORANGE_PI_WIFI_IP
+tmux attach -t boat
+```
+
+10. Stop the dashboard while attached to `tmux`:
+
+```text
+Ctrl+C
+```
+
+Useful `tmux` commands:
+
+```bash
+tmux ls
+tmux new -s boat
+tmux attach -t boat
+tmux kill-session -t boat
+```
+
 First test the ESP32/thruster path without radar:
 
 ```bash
