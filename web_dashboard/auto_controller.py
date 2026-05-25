@@ -10,7 +10,7 @@ from radar_nav.waypoint import GeoWaypoint, WaypointControl, WaypointNavConfig
 
 @dataclass
 class AutoConfig:
-    controller: str = "pulse_yaw_v1"
+    controller: str = "smooth_pd_v1"
     control_hz: float = 10.0
     min_speed_for_course_mps: float = 0.08
     gnss_reanchor_speed_mps: float = 0.3
@@ -26,6 +26,12 @@ class AutoConfig:
     pulse_reverse_deg: float = 38.0
     pulse_duration_s: float = 0.25
     pulse_observe_s: float = 0.35
+    smooth_kp: float = 0.025
+    smooth_kd: float = 0.035
+    smooth_turn_deadband: float = 0.08
+    smooth_pwm_slew_us_per_s: float = 300.0
+    behind_enter_deg: float = 125.0
+    behind_exit_deg: float = 70.0
     neutral_us: int = 1500
     level1_us: int = 1565
     level2_us: int = 1575
@@ -53,6 +59,10 @@ class AutoController:
         self._pulse_observe_until = 0.0
         self._latched_turn: str | None = None
         self._last_active_pwm: tuple[int, int] = (self.config.neutral_us, self.config.neutral_us)
+        self._smooth_left_us = float(self.config.neutral_us)
+        self._smooth_right_us = float(self.config.neutral_us)
+        self._smooth_last_at: float | None = None
+        self._behind_turn: str | None = None
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
@@ -84,7 +94,7 @@ class AutoController:
             self._waypoints = waypoints
             self._active_index = active_index
             self._status = status
-            self._clear_pulse_state()
+            self._clear_controller_state()
         self.control_state.set_auto_status(self.status())
         return self.route_snapshot()
 
@@ -331,6 +341,8 @@ class AutoController:
         return 0.0 if abs(yaw_rate) < self.config.yaw_rate_deadband_dps else yaw_rate
 
     def _compute_waypoint_control(self, dist: float, error: float, imu_health: str, imu: dict) -> WaypointControl:
+        if self.config.controller == "smooth_pd_v1":
+            return self._compute_smooth_pd_control(dist, error, imu_health, imu)
         if self.config.controller == "pulse_yaw_v1":
             return self._compute_pulse_yaw_control(dist, error, imu_health, imu)
         return self._compute_guesstimate_control(dist, error, imu_health, imu)
@@ -362,6 +374,7 @@ class AutoController:
             metadata["yaw_rate_dps"] = round(yaw_rate, 2)
             metadata["predicted_error_deg"] = round(predicted_error, 2)
 
+        abs_error = abs(error)
         if abs(predicted_error) <= self.config.heading_deadband_deg:
             action = "forward"
             steering_reason = "coasting/aligned"
@@ -487,6 +500,7 @@ class AutoController:
             action=action,
             metadata={
                 **metadata,
+                "behind_latch": self._behind_turn,
                 "action": action,
                 "display_action": display_action,
                 "left_us": left_us,
@@ -501,12 +515,155 @@ class AutoController:
             },
         )
 
-    def _clear_pulse_state(self) -> None:
+    def _compute_smooth_pd_control(self, dist: float, error: float, imu_health: str, imu: dict) -> WaypointControl:
+        reached = dist <= self.config.waypoint.reach_radius_m
+        yaw_rate = self._valid_imu_yaw_rate(imu_health, imu)
+        yaw_rate_f = 0.0 if yaw_rate is None else yaw_rate
+        predicted_error = heading_error_deg(yaw_rate_f * self.config.yaw_lookahead_s, error)
+        metadata = {
+            "controller": "smooth_pd_v1",
+            "raw_heading_error_deg": round(error, 2),
+            "predicted_error_deg": round(predicted_error, 2),
+            "yaw_rate_dps": None if yaw_rate is None else round(yaw_rate, 2),
+            "imu_health": imu_health,
+            "behind_latch": self._behind_turn,
+            "pwm_slew_us_per_s": self.config.smooth_pwm_slew_us_per_s,
+        }
+        if reached:
+            self._clear_controller_state()
+            return WaypointControl(
+                distance_m=dist,
+                heading_error_deg=error,
+                reached=True,
+                left_us=self.config.neutral_us,
+                right_us=self.config.neutral_us,
+                action="reached",
+                metadata={**metadata, "action": "reached", "display_action": "reached"},
+            )
+
+        action, display_action, controller_error, steering_reason = self._smooth_pd_action(error, predicted_error, yaw_rate_f)
+        turn_effort = max(-1.0, min(1.0, self.config.smooth_kp * controller_error - self.config.smooth_kd * yaw_rate_f))
+        if not action.startswith("behind_turn"):
+            if abs(turn_effort) <= self.config.smooth_turn_deadband or abs(predicted_error) <= self.config.heading_deadband_deg:
+                action = "forward"
+                display_action = "forward"
+                steering_reason = "small predicted/PD correction"
+                turn_effort = 0.0
+            elif turn_effort > 0.0:
+                action = "turn_right"
+                display_action = "turn right"
+                steering_reason = "smooth right correction"
+            else:
+                action = "turn_left"
+                display_action = "turn left"
+                steering_reason = "smooth left correction"
+        target_left, target_right = self._smooth_turn_to_pwm(turn_effort)
+        left_us, right_us = self._slew_smooth_pwm(target_left, target_right)
+        return WaypointControl(
+            distance_m=dist,
+            heading_error_deg=error,
+            reached=False,
+            left_us=left_us,
+            right_us=right_us,
+            action=action,
+            metadata={
+                **metadata,
+                "behind_latch": self._behind_turn,
+                "action": action,
+                "display_action": display_action,
+                "left_us": left_us,
+                "right_us": right_us,
+                "target_left_us": round(target_left, 1),
+                "target_right_us": round(target_right, 1),
+                "turn_effort": round(turn_effort, 3),
+                "controller_error_deg": round(controller_error, 2),
+                "steering_reason": steering_reason,
+                "smooth_kp": self.config.smooth_kp,
+                "smooth_kd": self.config.smooth_kd,
+                "smooth_turn_deadband": self.config.smooth_turn_deadband,
+                "behind_enter_deg": self.config.behind_enter_deg,
+                "behind_exit_deg": self.config.behind_exit_deg,
+            },
+        )
+
+    def _smooth_pd_action(self, error: float, predicted_error: float, yaw_rate: float) -> tuple[str, str, float, str]:
+        abs_error = abs(error)
+        if self._behind_turn is not None:
+            if abs_error <= self.config.behind_exit_deg:
+                self._behind_turn = None
+            else:
+                sign = 1.0 if self._behind_turn == "right" else -1.0
+                return (
+                    f"behind_turn_{self._behind_turn}",
+                    f"behind turn {self._behind_turn}",
+                    sign * max(abs_error, self.config.behind_enter_deg),
+                    "holding behind-target turn",
+                )
+
+        if abs_error >= self.config.behind_enter_deg:
+            if abs(yaw_rate) > self.config.yaw_rate_deadband_dps:
+                self._behind_turn = "right" if yaw_rate > 0 else "left"
+            else:
+                self._behind_turn = "right" if error > 0 else "left"
+            sign = 1.0 if self._behind_turn == "right" else -1.0
+            return (
+                f"behind_turn_{self._behind_turn}",
+                f"behind turn {self._behind_turn}",
+                sign * abs_error,
+                "entering behind-target turn",
+            )
+
+        self._behind_turn = None
+        if abs(predicted_error) <= self.config.heading_deadband_deg:
+            return "forward", "forward", error, "predicted alignment"
+        if predicted_error > 0:
+            return "turn_right", "turn right", error, "smooth right correction"
+        return "turn_left", "turn left", error, "smooth left correction"
+
+    def _smooth_turn_to_pwm(self, turn_effort: float) -> tuple[float, float]:
+        neutral = float(self.config.neutral_us)
+        active = float(self.config.level3_us)
+        span = max(0.0, active - neutral)
+        if turn_effort > 0.0:
+            return active, active - min(1.0, turn_effort) * span
+        if turn_effort < 0.0:
+            return active - min(1.0, abs(turn_effort)) * span, active
+        return active, active
+
+    def _slew_smooth_pwm(self, target_left: float, target_right: float) -> tuple[int, int]:
+        now = time.monotonic()
+        if self._smooth_last_at is None:
+            dt = 1.0 / max(self.config.control_hz, 1.0)
+        else:
+            dt = max(0.0, now - self._smooth_last_at)
+        self._smooth_last_at = now
+        step = max(0.0, self.config.smooth_pwm_slew_us_per_s) * dt
+        self._smooth_left_us = self._slew_value(self._smooth_left_us, target_left, step)
+        self._smooth_right_us = self._slew_value(self._smooth_right_us, target_right, step)
+        left = int(round(self._smooth_left_us))
+        right = int(round(self._smooth_right_us))
+        self._last_active_pwm = (left, right)
+        return left, right
+
+    @staticmethod
+    def _slew_value(current: float, target: float, step: float) -> float:
+        if step <= 0.0 or abs(target - current) <= step:
+            return target
+        return current + step if target > current else current - step
+
+    def _clear_controller_state(self) -> None:
         self._pulse_action = None
         self._pulse_until = 0.0
         self._pulse_observe_until = 0.0
         self._latched_turn = None
+        self._behind_turn = None
+        self._smooth_left_us = float(self.config.neutral_us)
+        self._smooth_right_us = float(self.config.neutral_us)
+        self._smooth_last_at = None
         self._last_active_pwm = (self.config.neutral_us, self.config.neutral_us)
+
+    def _clear_pulse_state(self) -> None:
+        self._clear_controller_state()
 
     def _action_to_pwm(self, action: str, level: int) -> tuple[int, int]:
         neutral = int(self.config.neutral_us)

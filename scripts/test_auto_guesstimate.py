@@ -18,7 +18,7 @@ class _ControlState:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Inspect the v1 auto waypoint guesstimate controller.")
-    parser.add_argument("--controller", default="pulse_yaw_v1", choices=("guesstimate_rate_v1", "pulse_yaw_v1"))
+    parser.add_argument("--controller", default="smooth_pd_v1", choices=("guesstimate_rate_v1", "pulse_yaw_v1", "smooth_pd_v1"))
     parser.add_argument("--distance-m", type=float, default=20.0)
     parser.add_argument("--heading-error-deg", type=float, required=True)
     parser.add_argument("--yaw-rate-dps", type=float, default=0.0)

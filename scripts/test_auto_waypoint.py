@@ -22,7 +22,7 @@ def main() -> None:
     parser.add_argument("log_path")
     parser.add_argument("--target-lat", type=float, required=True)
     parser.add_argument("--target-lon", type=float, required=True)
-    parser.add_argument("--controller", default="pulse_yaw_v1", choices=("guesstimate_rate_v1", "pulse_yaw_v1"))
+    parser.add_argument("--controller", default="smooth_pd_v1", choices=("guesstimate_rate_v1", "pulse_yaw_v1", "smooth_pd_v1"))
     parser.add_argument("--max-rows", type=int, default=40)
     args = parser.parse_args()
 

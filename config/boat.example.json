@@ -40,7 +40,7 @@
     "manual_slew_per_s": 4.0
   },
   "auto": {
-    "controller": "pulse_yaw_v1",
+    "controller": "smooth_pd_v1",
     "control_hz": 10.0,
     "reach_radius_m": 2.0,
     "approach_slow_radius_m": 8.0,
@@ -55,6 +55,12 @@
     "pulse_reverse_deg": 38.0,
     "pulse_duration_s": 0.25,
     "pulse_observe_s": 0.35,
+    "smooth_kp": 0.025,
+    "smooth_kd": 0.035,
+    "smooth_turn_deadband": 0.08,
+    "smooth_pwm_slew_us_per_s": 300.0,
+    "behind_enter_deg": 125.0,
+    "behind_exit_deg": 70.0,
     "imu_stale_s": 2.0,
     "min_speed_for_course_mps": 0.08,
     "gnss_reanchor_speed_mps": 0.3,
