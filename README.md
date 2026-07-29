@@ -2,7 +2,10 @@
 
 Orange Pi robot software for the MTR boat experiments.
 
-This repo is meant to become the shared home for the boat's sensor drivers, navigation logic, ROS2 nodes, dashboard, and actuator bridges. Right now the working path is direct Python bench/field testing: radar UART in, ESP32 thruster serial out. ROS2 support exists for the radar path, but full robot control should move there after the hardware behavior is proven.
+This repo is the shared home for the boat's sensor drivers, navigation logic,
+ROS 2 nodes, dashboard, and actuator bridges. ROS 2 is the intended robot
+runtime, while the direct Python bench/field paths remain available during the
+incremental migration.
 
 ## Current Capabilities
 
@@ -13,7 +16,7 @@ This repo is meant to become the shared home for the boat's sensor drivers, navi
 - Produce simple navigation output: throttle, steering, command, and reason.
 - Send gentle ESC PWM commands to an ESP32 over serial for basic thruster tests.
 - Run the current hardware test directly from Python scripts.
-- Build the radar reader/navigation path as ROS2 nodes for later robot integration.
+- Publish GNSS, IMU, and radar data through ROS 2 nodes.
 - Visualize radar/navigation state with pygame or the browser dashboard.
 
 ## Layout
@@ -21,14 +24,16 @@ This repo is meant to become the shared home for the boat's sensor drivers, navi
 - `radar_nav/`: core non-ROS radar/navigation logic. Scripts and ROS nodes both use this.
 - `gnss/`: `pynmea2`-based NMEA parsing for USB/serial GNSS receivers.
 - `imu/`: MPU-6050 I2C reader for accel/gyro samples.
-- `radar_ros/`: ROS2 wrapper nodes around the radar parser and `radar_nav` pipeline.
+- `boat_ros/`: thin ROS 2 wrappers for boat sensors and radar navigation.
 - `thruster_control/`: ESP32 serial and ESC PWM mapping helpers.
 - `scripts/`: runnable robot/development commands.
 - `config/radar/`: radar profile files for startup.
 - `web_dashboard/`: browser dashboard for demo/ROS sensor state.
 - `mmwave_uart.py`: low-level TI mmWave UART parser shared by scripts and ROS nodes.
 
-`radar_nav/` is required for radar navigation in any mode. `radar_ros/` is only needed when running the same radar logic as ROS2 nodes/topics. For now, thruster control is direct serial from scripts; a ROS2 thruster node can be added later.
+`radar_nav/` remains usable without ROS 2. The wrappers in `boat_ros/` keep
+hardware and navigation logic testable outside the ROS graph while the robot
+runtime is migrated incrementally.
 
 ## ESP32 Firmware
 
@@ -296,9 +301,9 @@ Any value from `config/boat.local.json` can still be overridden from the command
 python3 scripts/run_nav_esp32.py --forward-max-us 1525 --log
 ```
 
-## ROS2 Mode
+## ROS 2 Mode
 
-From a ROS2 workspace:
+From a ROS 2 workspace:
 
 ```bash
 mkdir -p ~/ros2_ws/src
@@ -306,14 +311,34 @@ cd ~/ros2_ws/src
 git clone https://github.com/armutie/mtr-boat-core.git
 cd ~/ros2_ws
 rosdep install --from-paths src --ignore-src -r -y
-colcon build --packages-select radar_ros
+colcon build --packages-select mtr_boat_core
 source install/setup.bash
+```
+
+Copy and edit the Orange Pi sensor parameters:
+
+```bash
+cp src/mtr-boat-core/config/ros/boat.example.yaml \
+  src/mtr-boat-core/config/ros/boat.local.yaml
+```
+
+Start the GNSS and IMU publishers together:
+
+```bash
+ros2 launch mtr_boat_core sensors.launch.py \
+  params_file:="$(pwd)/src/mtr-boat-core/config/ros/boat.local.yaml"
+```
+
+Either sensor can be disabled for bench work:
+
+```bash
+ros2 launch mtr_boat_core sensors.launch.py enable_imu:=false
 ```
 
 Run the radar UART publisher:
 
 ```bash
-ros2 run radar_ros radar_uart_node --ros-args \
+ros2 run mtr_boat_core radar_uart_node --ros-args \
   -p cfg_port:=/dev/ttyUSB0 \
   -p cfg_file:=config/radar/profile_2d.cfg \
   -p data_port:=/dev/ttyUSB1 \
@@ -323,11 +348,13 @@ ros2 run radar_ros radar_uart_node --ros-args \
 Run the navigation node:
 
 ```bash
-ros2 run radar_ros radar_nav_node
+ros2 run mtr_boat_core radar_nav_node
 ```
 
 Published topics:
 
+- `gnss/fix` (`sensor_msgs/NavSatFix`)
+- `imu/data_raw` (`sensor_msgs/Imu`)
 - `radar/raw_points` (`sensor_msgs/PointCloud2`)
 - `radar/filtered_points` (`sensor_msgs/PointCloud2`)
 - `radar/clusters_json` (`std_msgs/String`)
@@ -346,7 +373,15 @@ View ROS nav output with pygame:
 python3 scripts/run_nav_live.py --ros --nav-state-topic /radar/nav_state_json
 ```
 
-## ROS2 Roadmap
+GNSS, IMU, and radar point clouds use the ROS sensor-data QoS profile. Check
+the sensor publishers:
+
+```bash
+ros2 topic hz /gnss/fix
+ros2 topic hz /imu/data_raw
+```
+
+## ROS 2 Roadmap
 
 The current hardware test path is direct Python:
 
@@ -354,25 +389,33 @@ The current hardware test path is direct Python:
 radar UART -> radar_nav -> thruster_control -> ESP32 serial
 ```
 
-The intended robot runtime is ROS2 once the radar/ESP32 behavior is proven. The current ROS implementation covers the radar side:
+The intended robot runtime is ROS 2. The current package starts with thin
+sensor publishers and preserves the proven direct-Python hardware path during
+the migration:
 
 ```text
-radar_ros/radar_uart_node.py
+boat_ros/gnss_node.py
+  -> publishes gnss/fix
+
+boat_ros/imu_node.py
+  -> publishes imu/data_raw
+
+boat_ros/radar_uart_node.py
   -> publishes radar/raw_points
 
-radar_ros/radar_nav_node.py
+boat_ros/radar_nav_node.py
   -> subscribes radar/raw_points
   -> publishes radar/filtered_points
   -> publishes radar/clusters_json
   -> publishes radar/nav_state_json
 ```
 
-Missing before ROS2 becomes the main autonomous runtime:
+Missing before ROS 2 becomes the main autonomous runtime:
 
-- Add a thruster ROS node that subscribes to nav output and sends ESP32 serial commands.
-- Decide whether the thruster node consumes `radar/nav_state_json` directly or a cleaner future command topic.
-- Add launch/config files so the robot starts with one command instead of several terminals.
-- Move Pi-specific settings from `config/boat.local.json` into ROS launch/YAML when ROS becomes the main runtime.
+- Integrate the existing LiDAR `PointCloud2` publisher and a camera driver.
+- Define a sensor-independent perception output instead of coupling control to radar.
+- Add a safety/command node and a thruster node with exclusive ESP32 ownership.
+- Replace radar JSON control messages with typed, sensor-independent messages.
 - Validate `colcon build` and `ros2 run` on the Orange Pi or another sourced ROS2 environment.
 
 ## Dashboard

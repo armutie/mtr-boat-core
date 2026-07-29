@@ -1,9 +1,10 @@
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import PointCloud2
 
 from mmwave_uart import MmwaveUartParser, send_cfg
-from radar_ros.point_cloud import points_to_cloud
+from boat_ros.point_cloud import points_to_cloud
 
 
 class RadarUartNode(Node):
@@ -30,9 +31,10 @@ class RadarUartNode(Node):
         )
         self.frame_id = self.get_parameter("frame_id").value
 
-        qos_depth = 10
         self.raw_points_pub = self.create_publisher(
-            PointCloud2, self.get_parameter("raw_points_topic").value, qos_depth
+            PointCloud2,
+            self.get_parameter("raw_points_topic").value,
+            qos_profile_sensor_data,
         )
 
         poll_hz = float(self.get_parameter("poll_hz").value)

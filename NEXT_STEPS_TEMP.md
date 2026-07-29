@@ -47,8 +47,13 @@ Goal: waypoint command = desired motion; radar = constraint.
 - Test Pi on Wi-Fi / hotspot, bind `server.py` on LAN, open from phone/laptop.
 - Document IP discovery command and failure modes when Wi-Fi drops.
 
+## Architecture decision
+
+- ROS 2 is the long-term runtime and sensor integration layer.
+- Keep the Python dashboard as an operator interface, not the owner of hardware
+  drivers or actuator serial output.
+
 ## Open decisions
 
-- ROS2 vs Python dashboard as the long-term runtime home.
-- Actuator as dashboard-only demo vs separate ROS node.
+- Typed command message and safety/arbiter boundary for the future actuator ROS node.
 - Phone-first vs laptop-first operator UI polish.

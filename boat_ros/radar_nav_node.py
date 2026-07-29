@@ -5,12 +5,13 @@ from dataclasses import asdict
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import PointCloud2
 from std_msgs.msg import String
 
 from radar_nav import NavConfig, RadarNavPipeline
 from radar_nav.logging import output_to_record
-from radar_ros.point_cloud import cloud_to_points, points_to_cloud
+from boat_ros.point_cloud import cloud_to_points, points_to_cloud
 
 
 def nav_config_from_params(node: Node) -> NavConfig:
@@ -59,16 +60,18 @@ class RadarNavNode(Node):
         cfg.clamp_values()
         self.pipeline = RadarNavPipeline(cfg)
 
-        qos_depth = 10
         self.create_subscription(
             PointCloud2,
             self.get_parameter("raw_points_topic").value,
             self.on_raw_points,
-            qos_depth,
+            qos_profile_sensor_data,
         )
         self.filtered_points_pub = self.create_publisher(
-            PointCloud2, self.get_parameter("filtered_points_topic").value, qos_depth
+            PointCloud2,
+            self.get_parameter("filtered_points_topic").value,
+            qos_profile_sensor_data,
         )
+        qos_depth = 10
         self.clusters_pub = self.create_publisher(String, self.get_parameter("clusters_topic").value, qos_depth)
         self.nav_state_pub = self.create_publisher(String, self.get_parameter("nav_state_topic").value, qos_depth)
 

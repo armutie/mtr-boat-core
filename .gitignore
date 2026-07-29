@@ -5,3 +5,4 @@ output/
 *.png
 *.csv
 config/boat.local.json
+config/ros/boat.local.yaml

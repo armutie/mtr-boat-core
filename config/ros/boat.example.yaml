@@ -1,0 +1,19 @@
+gnss_node:
+  ros__parameters:
+    port: /dev/ttyACM2
+    baud: 38400
+    frame_id: gnss_link
+    topic: gnss/fix
+    poll_hz: 20.0
+    serial_timeout_s: 0.05
+
+imu_node:
+  ros__parameters:
+    bus: 2
+    address: "0x68"
+    frame_id: imu_link
+    topic: imu/data_raw
+    publish_rate_hz: 50.0
+    calibrate_on_start: true
+    calibration_samples: 200
+    calibration_delay_s: 0.01
