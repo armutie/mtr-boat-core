@@ -17,3 +17,13 @@ imu_node:
     calibrate_on_start: true
     calibration_samples: 200
     calibration_delay_s: 0.01
+
+seyond_pointcloud_node:
+  ros__parameters:
+    lidar_ip: "172.168.1.10"
+    lidar_port: 8010
+    udp_port: 8010
+    frame_id: "lidar_link"
+    min_range: 0.15
+    max_range: 50.0
+    publish_second_return: true

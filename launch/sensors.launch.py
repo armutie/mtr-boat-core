@@ -14,6 +14,13 @@ def generate_launch_description() -> LaunchDescription:
     params_file = LaunchConfiguration("params_file")
     enable_gnss = LaunchConfiguration("enable_gnss")
     enable_imu = LaunchConfiguration("enable_imu")
+    enable_lidar = LaunchConfiguration("enable_lidar")
+    lidar_x = LaunchConfiguration("lidar_x")
+    lidar_y = LaunchConfiguration("lidar_y")
+    lidar_z = LaunchConfiguration("lidar_z")
+    lidar_roll = LaunchConfiguration("lidar_roll")
+    lidar_pitch = LaunchConfiguration("lidar_pitch")
+    lidar_yaw = LaunchConfiguration("lidar_yaw")
 
     return LaunchDescription(
         [
@@ -24,6 +31,13 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument("enable_gnss", default_value="true"),
             DeclareLaunchArgument("enable_imu", default_value="true"),
+            DeclareLaunchArgument("enable_lidar", default_value="true"),
+            DeclareLaunchArgument("lidar_x", default_value="0.0"),
+            DeclareLaunchArgument("lidar_y", default_value="0.0"),
+            DeclareLaunchArgument("lidar_z", default_value="0.0"),
+            DeclareLaunchArgument("lidar_roll", default_value="0.0"),
+            DeclareLaunchArgument("lidar_pitch", default_value="0.0"),
+            DeclareLaunchArgument("lidar_yaw", default_value="0.0"),
             Node(
                 package="mtr_boat_core",
                 executable="gnss_node",
@@ -39,6 +53,40 @@ def generate_launch_description() -> LaunchDescription:
                 output="screen",
                 parameters=[params_file],
                 condition=IfCondition(enable_imu),
+            ),
+            Node(
+                package="seyond_mapping",
+                executable="seyond_pointcloud_node",
+                name="seyond_pointcloud_node",
+                output="screen",
+                parameters=[params_file],
+                remappings=[("points", "/lidar/points")],
+                condition=IfCondition(enable_lidar),
+            ),
+            Node(
+                package="tf2_ros",
+                executable="static_transform_publisher",
+                name="lidar_static_transform",
+                output="screen",
+                arguments=[
+                    "--x",
+                    lidar_x,
+                    "--y",
+                    lidar_y,
+                    "--z",
+                    lidar_z,
+                    "--roll",
+                    lidar_roll,
+                    "--pitch",
+                    lidar_pitch,
+                    "--yaw",
+                    lidar_yaw,
+                    "--frame-id",
+                    "base_link",
+                    "--child-frame-id",
+                    "lidar_link",
+                ],
+                condition=IfCondition(enable_lidar),
             ),
         ]
     )

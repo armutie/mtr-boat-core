@@ -17,6 +17,7 @@ incremental migration.
 - Send gentle ESC PWM commands to an ESP32 over serial for basic thruster tests.
 - Run the current hardware test directly from Python scripts.
 - Publish GNSS, IMU, and radar data through ROS 2 nodes.
+- Publish the Seyond D1-R as `/lidar/points` (`PointCloud2`) in `lidar_link`.
 - Visualize radar/navigation state with pygame or the browser dashboard.
 
 ## Layout
@@ -34,6 +35,32 @@ incremental migration.
 `radar_nav/` remains usable without ROS 2. The wrappers in `boat_ros/` keep
 hardware and navigation logic testable outside the ROS graph while the robot
 runtime is migrated incrementally.
+
+The LiDAR node is provided by the adjacent `seyond_mapping` ROS package built
+from the Seyond SDK integration. Source both package overlays before launching
+the boat sensors.
+
+Build and launch on the Orange Pi:
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/lidar/inno-lidar-sdk/ros2_mapping_ws/install/setup.bash
+colcon build --symlink-install
+source install/setup.bash
+ros2 launch mtr_boat_core sensors.launch.py
+```
+
+For a LiDAR-only hardware check:
+
+```bash
+ros2 launch mtr_boat_core sensors.launch.py \
+  enable_gnss:=false enable_imu:=false
+```
+
+Measure the real LiDAR mounting pose before field use. For example, a sensor
+25 cm forward and 40 cm above `base_link` would be launched with
+`lidar_x:=0.25 lidar_z:=0.40`; those numbers are illustrative, not boat
+measurements.
 
 ## ESP32 Firmware
 
