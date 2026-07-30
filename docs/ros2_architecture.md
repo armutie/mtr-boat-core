@@ -14,8 +14,39 @@ camera driver ----> /camera/image_raw  sensor_msgs/Image
 LiDAR driver -----> /lidar/points      sensor_msgs/PointCloud2
 ```
 
-GNSS and IMU are implemented in `boat_ros`. The camera and LiDAR entries define
-the interfaces that their existing drivers should meet when added.
+GNSS, IMU, and camera are implemented in `boat_ros`. The LiDAR entry defines
+the interface its existing driver should meet when added.
+
+## Camera contract
+
+The Arducam UVC integration owns `/dev/video0` in `camera_node` and exposes:
+
+```text
+topic:       /camera/image_raw
+type:        sensor_msgs/msg/Image
+frame:       camera_optical_frame
+QoS:         sensor-data (best effort, volatile)
+encoding:    bgr8
+timestamp:   Orange Pi acquisition time
+web viewer:  http://<orange-pi-ip>:8081/
+```
+
+The default capture profile is hardware MJPEG at 1280x720 and 30 FPS.
+GStreamer sends those native JPEG frames directly to browser clients without a
+second encode. A separate latest-frame worker decodes the standard ROS image,
+so slow perception or DDS consumers cannot queue stale operator video. Depth
+estimation remains a separate consumer so it cannot add latency to the
+operator stream.
+
+The image frame follows the ROS optical convention: X right, Y down, Z forward.
+`sensors.launch.py` publishes both the configurable
+`base_link -> camera_link` mounting transform and the fixed
+`camera_link -> camera_optical_frame` axis transform. Override `camera_x`,
+`camera_y`, `camera_z`, `camera_roll`, `camera_pitch`, and `camera_yaw` only
+after measuring the installed pose.
+
+No placeholder calibration is published. Add `/camera/camera_info` only after
+calibrating the real lens at the selected resolution.
 
 ## Design rules
 

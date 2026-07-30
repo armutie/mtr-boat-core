@@ -40,6 +40,7 @@ setup(
     license="MIT",
     entry_points={
         "console_scripts": [
+            "camera_node = boat_ros.camera_node:main",
             "gnss_node = boat_ros.gnss_node:main",
             "imu_node = boat_ros.imu_node:main",
             "radar_uart_node = boat_ros.radar_uart_node:main",

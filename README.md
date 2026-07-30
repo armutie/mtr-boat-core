@@ -17,6 +17,7 @@ incremental migration.
 - Send gentle ESC PWM commands to an ESP32 over serial for basic thruster tests.
 - Run the current hardware test directly from Python scripts.
 - Publish GNSS, IMU, and radar data through ROS 2 nodes.
+- Publish a UVC camera on `/camera/image_raw` and serve a browser livestream.
 - Visualize radar/navigation state with pygame or the browser dashboard.
 
 ## Layout
@@ -34,6 +35,41 @@ incremental migration.
 `radar_nav/` remains usable without ROS 2. The wrappers in `boat_ros/` keep
 hardware and navigation logic testable outside the ROS graph while the robot
 runtime is migrated incrementally.
+
+## Camera Livestream
+
+The camera node uses the Arducam's native MJPEG capture mode at 1280x720 and
+30 FPS by default. It publishes decoded `sensor_msgs/Image` frames using
+sensor-data QoS and serves the latest frames directly to browsers. Depth
+estimation is deliberately outside this low-latency path.
+
+Build and launch a camera-only test on the Orange Pi:
+
+```bash
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install
+source install/setup.bash
+ros2 launch mtr_boat_core sensors.launch.py \
+  enable_gnss:=false enable_imu:=false
+```
+
+Open the fullscreen viewer from any device on the same network:
+
+```text
+http://<orange-pi-ip>:8081/
+```
+
+Useful endpoints are `/stream.mjpg`, `/snapshot.jpg`, and `/health`. The node
+keeps running if the USB camera is unplugged and reconnects automatically when
+`/dev/video0` returns. If a temporary bench setup is sideways, set
+`web_rotation_deg` in the ROS YAML to `90`, `180`, or `270`; this rotates only
+the browser presentation and leaves the ROS image geometry unchanged.
+
+Measure the physical camera pose before field use and pass it with
+`camera_x`, `camera_y`, `camera_z`, `camera_roll`, `camera_pitch`, and
+`camera_yaw`. Distances are metres and angles are radians. Camera calibration
+is not yet available, so `/camera/camera_info` is intentionally not published
+until real intrinsics and distortion coefficients are measured.
 
 ## ESP32 Firmware
 
