@@ -6,12 +6,10 @@ serves a low-latency browser stream. The default capture profile is MJPEG,
 
 ## Stable device name
 
-Install the included udev rule once:
+Install all included MTR hardware rules once:
 
 ```bash
-sudo cp config/udev/99-mtr-camera.rules /etc/udev/rules.d/
-sudo udevadm control --reload-rules
-sudo udevadm trigger --subsystem-match=video4linux
+sudo ./scripts/install_udev_rules.sh
 ls -l /dev/mtr_camera
 ```
 

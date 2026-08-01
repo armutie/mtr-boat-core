@@ -21,6 +21,7 @@ with ``writeMicroseconds`` after clamping to the configured range.
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass
 
@@ -162,7 +163,9 @@ class Esp32ThrusterSerial:
         self.ser = serial.Serial(port, baudrate=baud, timeout=timeout)
         self.last_pwm_us: int | None = None
         self.last_pair: tuple[int, int] | None = None
+        self.last_response: str | None = None
         self.ready_banner: str | None = None
+        self._command_lock = threading.Lock()
         # Allow the ESP32 USB-CDC interface to enumerate before we read.
         time.sleep(0.5)
         self._wait_for_ready(ready_timeout_s)
@@ -194,27 +197,70 @@ class Esp32ThrusterSerial:
             text = line.decode("ascii", errors="replace").strip()
             if text.startswith("READY"):
                 self.ready_banner = text
+                self.last_response = text
                 return
 
-    def send_pwm(self, pwm_us: int) -> None:
-        self.ser.write(f"PWM {int(pwm_us)}\n".encode("ascii"))
-        self.ser.flush()
-        self.last_pwm_us = int(pwm_us)
-        self.last_pair = None
+    def _request(
+        self,
+        command: str,
+        response_prefixes: tuple[str, ...],
+        *,
+        timeout_s: float = 0.5,
+    ) -> str | None:
+        with self._command_lock:
+            self.ser.write(f"{command}\n".encode("ascii"))
+            self.ser.flush()
+            deadline = time.monotonic() + max(timeout_s, 0.0)
+            while time.monotonic() < deadline:
+                line = self.ser.readline()
+                if not line:
+                    continue
+                text = line.decode("ascii", errors="replace").strip()
+                self.last_response = text
+                if text.startswith(response_prefixes):
+                    return text
+        return None
 
-    def send_pwm_pair(self, left_us: int, right_us: int) -> None:
+    def probe_dual_firmware(self, timeout_s: float = 1.0) -> str | None:
+        """Return evidence that the connected firmware supports PWM pairs."""
+        banner = self.ready_banner or ""
+        if banner.startswith("READY L=") and " R=" in banner:
+            return banner
+        response = self._request(
+            "PING",
+            ("PONG L",),
+            timeout_s=timeout_s,
+        )
+        if response is not None and " R" in response:
+            return response
+        return None
+
+    def send_pwm(self, pwm_us: int) -> str | None:
+        value = int(pwm_us)
+        response = self._request(
+            f"PWM {value}",
+            ("OK PWM ", "ERR "),
+        )
+        self.last_pwm_us = value
+        self.last_pair = None
+        return response
+
+    def send_pwm_pair(self, left_us: int, right_us: int) -> str | None:
         left = int(left_us)
         right = int(right_us)
-        self.ser.write(f"PWM L{left} R{right}\n".encode("ascii"))
-        self.ser.flush()
+        response = self._request(
+            f"PWM L{left} R{right}",
+            ("OK L", "ERR "),
+        )
         self.last_pair = (left, right)
         self.last_pwm_us = None
+        return response
 
-    def stop(self) -> None:
-        self.ser.write(b"STOP\n")
-        self.ser.flush()
+    def stop(self) -> str | None:
+        response = self._request("STOP", ("OK STOP", "ERR "))
         self.last_pwm_us = None
         self.last_pair = None
+        return response
 
     def close(self) -> None:
         try:

@@ -64,6 +64,17 @@ git clone --branch ros2-foundation --single-branch \
 source ~/mtr_ws/install/setup.bash
 ```
 
+Install the stable hardware names once:
+
+```bash
+cd ~/mtr_ws/src/mtr-boat-core
+sudo ./scripts/install_udev_rules.sh
+```
+
+This automatically maps the tested hardware to `/dev/mtr_camera`,
+`/dev/mtr_esp32`, and `/dev/mtr_gnss`, regardless of USB connection order.
+The aliases return automatically after reconnecting a device or rebooting.
+
 Create the local sensor configuration:
 
 ```bash
@@ -126,6 +137,7 @@ legacy bench mode.
 
 - [ROS 2 architecture and safety boundaries](docs/ros2_architecture.md)
 - [ROS 2 dashboard and thruster control](docs/control.md)
+- [Stable hardware device names](docs/hardware.md)
 - [BNO055 wiring and validation](docs/bno055.md)
 - [Camera setup and browser viewer](docs/camera.md)
 - [Seyond D1-R setup](docs/lidar.md)

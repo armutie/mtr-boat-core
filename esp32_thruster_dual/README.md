@@ -39,7 +39,9 @@ strapping pins (0, 2, 5, 12, 15) for ESCs.
 
 `Esp32ThrusterSerial` (`thruster_control/esp32_serial.py`) waits for that
 `READY` line before returning from `__init__`, so the dashboard never sends
-throttle to a not-yet-armed ESC.
+throttle to a not-yet-armed ESC. If a running board does not replay its
+one-time banner when the port opens, the ROS node verifies pair support with
+`PING` and requires a `PONG L... R...` response before accepting commands.
 
 ## Wire protocol
 

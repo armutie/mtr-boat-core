@@ -37,5 +37,18 @@ ros2 launch mtr_boat_core boat.launch.py \
   params_file:="$PARAMS" enable_thruster:=true
 ```
 
+The node publishes the ESP32 response to each serial command on
+`/thrusters/status`. A healthy neutral acknowledgement looks like:
+
+```text
+data: OK L1500 R1500
+```
+
+Inspect it with:
+
+```bash
+ros2 topic echo /thrusters/status
+```
+
 Use `web_dashboard --direct-control` only for an isolated legacy bench test,
 never alongside `thruster_node`.

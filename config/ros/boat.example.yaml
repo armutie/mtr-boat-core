@@ -1,6 +1,6 @@
 gnss_node:
   ros__parameters:
-    port: /dev/ttyACM2
+    port: /dev/mtr_gnss
     baud: 38400
     frame_id: gnss_link
     topic: gnss/fix
@@ -132,9 +132,10 @@ autonomy_node:
 
 thruster_node:
   ros__parameters:
-    port: /dev/ttyACM0
+    port: /dev/mtr_esp32
     baud: 115200
     command_topic: thrusters/command
+    status_topic: thrusters/status
     send_rate_hz: 20.0
     command_timeout_s: 0.5
     neutral_us: 1500

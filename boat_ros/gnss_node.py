@@ -19,7 +19,7 @@ class GnssNode(Node):
     def __init__(self) -> None:
         super().__init__("gnss_node")
 
-        self.declare_parameter("port", "/dev/ttyACM2")
+        self.declare_parameter("port", "/dev/mtr_gnss")
         self.declare_parameter("baud", 38400)
         self.declare_parameter("frame_id", "gnss_link")
         self.declare_parameter("topic", "gnss/fix")

@@ -4,7 +4,7 @@ import time
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Int32MultiArray
+from std_msgs.msg import Int32MultiArray, String
 
 from thruster_control import (
     Esp32ThrusterSerial,
@@ -16,9 +16,10 @@ class ThrusterNode(Node):
     def __init__(self) -> None:
         super().__init__("thruster_node")
 
-        self.declare_parameter("port", "/dev/ttyACM0")
+        self.declare_parameter("port", "/dev/mtr_esp32")
         self.declare_parameter("baud", 115200)
         self.declare_parameter("command_topic", "thrusters/command")
+        self.declare_parameter("status_topic", "thrusters/status")
         self.declare_parameter("send_rate_hz", 20.0)
         self.declare_parameter("command_timeout_s", 0.5)
         self.declare_parameter("neutral_us", 1500)
@@ -39,16 +40,24 @@ class ThrusterNode(Node):
         baud = int(self.get_parameter("baud").value)
         self.serial = Esp32ThrusterSerial(port, baud=baud)
         if bool(self.get_parameter("require_dual_firmware").value):
-            banner = self.serial.ready_banner or ""
-            if not banner.startswith("READY L="):
+            identity = self.serial.probe_dual_firmware()
+            if identity is None:
                 self.serial.close()
                 raise RuntimeError(
                     "dual-thruster firmware is required for ROS control"
                 )
+            self.get_logger().info(
+                f"Verified dual-thruster firmware: {identity}"
+            )
 
         self._left_us = self.mapping.neutral_us
         self._right_us = self.mapping.neutral_us
         self._command_at: float | None = None
+        self.status_publisher = self.create_publisher(
+            String,
+            str(self.get_parameter("status_topic").value),
+            10,
+        )
 
         self.create_subscription(
             Int32MultiArray,
@@ -87,7 +96,15 @@ class ThrusterNode(Node):
         right_us = (
             self._right_us if fresh else self.mapping.neutral_us
         )
-        self.serial.send_pwm_pair(left_us, right_us)
+        response = self.serial.send_pwm_pair(left_us, right_us)
+        if response is None:
+            self.get_logger().warning(
+                "No acknowledgement from ESP32 thruster firmware"
+            )
+            return
+        message = String()
+        message.data = response
+        self.status_publisher.publish(message)
 
     def destroy_node(self) -> bool:
         try:

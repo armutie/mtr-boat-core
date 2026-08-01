@@ -13,12 +13,12 @@ cp config/boat.example.json config/boat.local.json
 Edit `config/boat.local.json` with the real serial ports and I2C addresses. The
 local file is ignored by Git.
 
-Common device names:
+Stable device names after running `sudo ./scripts/install_udev_rules.sh`:
 
-- ESP32: `/dev/ttyACM0`
+- ESP32: `/dev/mtr_esp32`
 - radar configuration: `/dev/ttyUSB0`
 - radar data: `/dev/ttyUSB1`
-- GNSS: another `/dev/ttyACM*`
+- GNSS: `/dev/mtr_gnss`
 
 ## Bench tools
 

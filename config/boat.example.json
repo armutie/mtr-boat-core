@@ -6,11 +6,11 @@
     "baud": 921600
   },
   "esp32": {
-    "port": "/dev/ttyACM0",
+    "port": "/dev/mtr_esp32",
     "baud": 115200
   },
   "gnss": {
-    "port": "/dev/ttyACM2",
+    "port": "/dev/mtr_gnss",
     "baud": 38400
   },
   "imu": {
