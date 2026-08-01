@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Seyond Live View</title>
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+html,body,#view{width:100%;height:100%;margin:0;overflow:hidden}
+body{background:#05080d;color:#e8f1fb;font:14px system-ui,sans-serif}
+#view{display:block;touch-action:none;cursor:crosshair}
+#hud{position:fixed;top:14px;left:14px;min-width:270px;padding:13px 15px;
+ background:#0c1420e8;border:1px solid #2c4259;border-radius:11px;
+ box-shadow:0 10px 35px #000a;backdrop-filter:blur(8px)}
+#brand{display:flex;align-items:center;gap:9px;font-size:17px;font-weight:700}
+#dot{width:10px;height:10px;border-radius:50%;background:#f05b62;box-shadow:0 0 12px #f05b62}
+#dot.live{background:#43e58c;box-shadow:0 0 12px #43e58c}
+#stats{margin:7px 0 10px;color:#aabbd0;font-variant-numeric:tabular-nums}
+.row{display:grid;grid-template-columns:90px 1fr 38px;align-items:center;gap:7px;margin:7px 0}
+.row output{text-align:right;color:#9fd6ff}.row select{grid-column:2/4}
+input,select,button{accent-color:#47b9ff}
+button{background:#17283a;color:#e8f1fb;border:1px solid #36536d;border-radius:6px;padding:6px 10px}
+button:hover{background:#213a52}
+#actions{display:flex;gap:8px;margin-top:10px}
+#help{position:fixed;bottom:13px;left:50%;transform:translateX(-50%);
+ padding:7px 12px;border-radius:8px;background:#0c1420cf;color:#bdcada;
+ border:1px solid #24384d;white-space:nowrap}
+#crosshair{position:fixed;left:50%;top:50%;width:14px;height:14px;transform:translate(-50%,-50%);opacity:.45}
+#crosshair:before,#crosshair:after{content:"";position:absolute;background:#dceeff}
+#crosshair:before{left:6px;top:0;width:2px;height:14px}
+#crosshair:after{left:0;top:6px;width:14px;height:2px}
+</style>
+</head>
+<body>
+<canvas id="view"></canvas><div id="crosshair"></div>
+<section id="hud">
+  <div id="brand"><span id="dot"></span>Seyond D1-R Live</div>
+  <div id="stats">Connecting…</div>
+  <label class="row">Point size<input id="pointSize" type="range" min=".5" max="8" step=".25" value="2.5"><output id="pointSizeOut">2.5</output></label>
+  <label class="row">Exposure<input id="exposure" type="range" min=".4" max="2.5" step=".05" value="1.15"><output id="exposureOut">1.15</output></label>
+  <label class="row">Contrast<input id="contrast" type="range" min=".3" max="3" step=".05" value="1.25"><output id="contrastOut">1.25</output></label>
+  <label class="row">Color<select id="colorMode"><option value="0">Reflectance</option><option value="1">Distance</option><option value="2">Height</option></select></label>
+  <label class="row">Ground grid<input id="gridToggle" type="checkbox" checked><output></output></label>
+  <div id="actions"><button id="pause">Pause</button><button id="reset">Reset position</button><button id="fullscreen">Fullscreen</button></div>
+</section>
+<div id="help">Drag to look · WASD move · Q/E down/up · Shift faster · Double-click for mouse look</div>
+<script>
+"use strict";
+const $=id=>document.getElementById(id),canvas=$("view"),gl=canvas.getContext("webgl",{antialias:true});
+if(!gl)throw Error("WebGL is required");
+const vs=`attribute vec4 point;uniform mat4 mvp;uniform float pointSize,r0,r1,mode,exposure,contrast,maxRange;
+varying vec3 color;varying float fade;
+vec3 turbo(float x){x=clamp(x,0.,1.);return clamp(vec3(1.5-abs(4.*x-3.),1.5-abs(4.*x-2.),1.5-abs(4.*x-1.)),0.,1.);}
+void main(){vec3 p=point.xyz;gl_Position=mvp*vec4(p,1.);float d=length(p);
+gl_PointSize=pointSize*clamp(10./max(gl_Position.w,.01),1.,4.);
+float reflectance=clamp((point.w-r0)/max(r1-r0,.001),0.,1.);
+reflectance=pow(reflectance,1./max(contrast,.01))*exposure;
+float value=mode<.5?reflectance:(mode<1.5?d/max(maxRange,.1):clamp((p.z+2.)/4.,0.,1.));
+color=mode<.5?mix(vec3(.015,.035,.07),vec3(.65,.9,1.),clamp(value,0.,1.)):turbo(value);
+fade=1.-smoothstep(maxRange*.72,maxRange,d);}`;
+const fs=`precision mediump float;varying vec3 color;varying float fade;
+void main(){vec2 q=gl_PointCoord-.5;float r=dot(q,q);if(r>.25)discard;
+float edge=1.-smoothstep(.13,.25,r);gl_FragColor=vec4(color*mix(.65,1.,edge),max(.12,fade));}`;
+const lineVs=`attribute vec3 p;uniform mat4 mvp;void main(){gl_Position=mvp*vec4(p,1.);}`;
+const lineFs=`precision mediump float;uniform vec4 color;void main(){gl_FragColor=color;}`;
+function shader(type,source){const s=gl.createShader(type);gl.shaderSource(s,source);gl.compileShader(s);
+ if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(s));return s}
+function program(v,f){const p=gl.createProgram();gl.attachShader(p,shader(gl.VERTEX_SHADER,v));
+ gl.attachShader(p,shader(gl.FRAGMENT_SHADER,f));gl.linkProgram(p);return p}
+const pointProgram=program(vs,fs),lineProgram=program(lineVs,lineFs);
+const pointBuffer=gl.createBuffer(),gridBuffer=gl.createBuffer();
+const pointLoc=gl.getAttribLocation(pointProgram,"point"),gridLoc=gl.getAttribLocation(lineProgram,"p");
+const pu={};["mvp","pointSize","r0","r1","mode","exposure","contrast","maxRange"].forEach(n=>pu[n]=gl.getUniformLocation(pointProgram,n));
+const gu={mvp:gl.getUniformLocation(lineProgram,"mvp"),color:gl.getUniformLocation(lineProgram,"color")};
+let pointCount=0,framePoints=null,reflLow=0,reflHigh=255,floorZ=-1.5,maxRange=50;
+let frames=0,lastStats=performance.now(),displayFps=0,paused=false,connected=false;
+let eye=[0,0,0],yaw=0,pitch=0,drag=null,keys={},lastDraw=performance.now(),gridCount=0,lastFloor=NaN;
+function ident(){return new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1])}
+function mul(a,b){const o=new Float32Array(16);for(let c=0;c<4;c++)for(let r=0;r<4;r++)
+ o[c*4+r]=a[r]*b[c*4]+a[4+r]*b[c*4+1]+a[8+r]*b[c*4+2]+a[12+r]*b[c*4+3];return o}
+function perspective(fovy,aspect,n,f){const t=1/Math.tan(fovy/2),o=new Float32Array(16);
+ o[0]=t/aspect;o[5]=t;o[10]=(f+n)/(n-f);o[11]=-1;o[14]=2*f*n/(n-f);return o}
+const sub=(a,b)=>a.map((v,i)=>v-b[i]),dot=(a,b)=>a.reduce((s,v,i)=>s+v*b[i],0);
+const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+const norm=a=>{const n=Math.hypot(...a)||1;return a.map(v=>v/n)};
+function lookAt(e,c,u){const z=norm(sub(e,c)),x=norm(cross(u,z)),y=cross(z,x),o=ident();
+ o[0]=x[0];o[1]=y[0];o[2]=z[0];o[4]=x[1];o[5]=y[1];o[6]=z[1];
+ o[8]=x[2];o[9]=y[2];o[10]=z[2];o[12]=-dot(x,e);o[13]=-dot(y,e);o[14]=-dot(z,e);return o}
+function rebuildGrid(){
+ const extent=Math.min(50,Math.max(10,Math.ceil(maxRange/10)*10)),v=[];
+ for(let i=-extent;i<=extent;i++){v.push(-extent,i,floorZ,extent,i,floorZ,i,-extent,floorZ,i,extent,floorZ)}
+ const axes=[0,0,floorZ,Math.min(5,extent),0,floorZ,0,0,floorZ,0,Math.min(5,extent),floorZ];
+ v.push(...axes);gridCount=v.length/3;gl.bindBuffer(gl.ARRAY_BUFFER,gridBuffer);
+ gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(v),gl.STATIC_DRAW);lastFloor=floorZ}
+function draw(now){
+ const dt=Math.min(.05,(now-lastDraw)/1000),speed=(keys.ShiftLeft?4:1)*Math.max(1,maxRange*.08);
+ const forward=[Math.cos(yaw),Math.sin(yaw),0],right=[forward[1],-forward[0],0];
+ if(keys.KeyW)eye=eye.map((v,i)=>v+forward[i]*speed*dt);if(keys.KeyS)eye=eye.map((v,i)=>v-forward[i]*speed*dt);
+ if(keys.KeyD)eye=eye.map((v,i)=>v+right[i]*speed*dt);if(keys.KeyA)eye=eye.map((v,i)=>v-right[i]*speed*dt);
+ if(keys.KeyE)eye[2]+=speed*dt;if(keys.KeyQ)eye[2]-=speed*dt;lastDraw=now;
+ const d=devicePixelRatio||1,w=Math.round(canvas.clientWidth*d),h=Math.round(canvas.clientHeight*d);
+ if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h}gl.viewport(0,0,w,h);
+ gl.clearColor(.012,.021,.034,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.enable(gl.DEPTH_TEST);
+ const direction=[Math.cos(pitch)*Math.cos(yaw),Math.cos(pitch)*Math.sin(yaw),Math.sin(pitch)];
+ const view=lookAt(eye,eye.map((v,i)=>v+direction[i]),[0,0,1]);
+ const mvp=mul(perspective(.92,w/h,.015,Math.max(100,maxRange*4)),view);
+ if($("gridToggle").checked){if(Math.abs(lastFloor-floorZ)>.05)rebuildGrid();gl.useProgram(lineProgram);
+  gl.uniformMatrix4fv(gu.mvp,false,mvp);gl.uniform4f(gu.color,.18,.32,.43,.38);gl.bindBuffer(gl.ARRAY_BUFFER,gridBuffer);
+  gl.enableVertexAttribArray(gridLoc);gl.vertexAttribPointer(gridLoc,3,gl.FLOAT,false,0,0);gl.drawArrays(gl.LINES,0,gridCount)}
+ if(pointCount){gl.useProgram(pointProgram);gl.uniformMatrix4fv(pu.mvp,false,mvp);
+  gl.uniform1f(pu.pointSize,+$("pointSize").value*d);gl.uniform1f(pu.r0,reflLow);gl.uniform1f(pu.r1,reflHigh);
+  gl.uniform1f(pu.mode,+$("colorMode").value);gl.uniform1f(pu.exposure,+$("exposure").value);
+  gl.uniform1f(pu.contrast,+$("contrast").value);gl.uniform1f(pu.maxRange,maxRange);
+  gl.bindBuffer(gl.ARRAY_BUFFER,pointBuffer);gl.enableVertexAttribArray(pointLoc);
+  gl.vertexAttribPointer(pointLoc,4,gl.FLOAT,false,0,0);gl.drawArrays(gl.POINTS,0,pointCount)}
+ requestAnimationFrame(draw)}
+function connect(){
+ const socket=new WebSocket(`ws://${location.host}/stream`);socket.binaryType="arraybuffer";
+ socket.onopen=()=>{connected=true;$("dot").classList.add("live");$("stats").textContent="Waiting for LiDAR…"};
+ socket.onclose=()=>{connected=false;$("dot").classList.remove("live");$("stats").textContent="Disconnected — retrying…";setTimeout(connect,1000)};
+ socket.onmessage=event=>{if(paused)return;const data=new DataView(event.data);
+  if(data.byteLength<32||data.getUint32(0,true)!==0x31564453)return;
+  pointCount=data.getUint32(4,true);reflLow=data.getFloat32(16,true);reflHigh=data.getFloat32(20,true);
+  floorZ=data.getFloat32(24,true);maxRange=Math.max(1,data.getFloat32(28,true));
+  framePoints=new Float32Array(event.data,32,pointCount*4);gl.bindBuffer(gl.ARRAY_BUFFER,pointBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER,framePoints,gl.DYNAMIC_DRAW);frames++;
+  const now=performance.now();if(now-lastStats>500){displayFps=frames*1000/(now-lastStats);frames=0;lastStats=now;
+   $("stats").textContent=`${displayFps.toFixed(1)} FPS · ${pointCount.toLocaleString()} points · ${maxRange.toFixed(1)} m`}}
+}
+for(const id of ["pointSize","exposure","contrast"])$(id).oninput=()=>$(id+"Out").value=$(id).value;
+$("pause").onclick=()=>{paused=!paused;$("pause").textContent=paused?"Resume":"Pause"};
+$("reset").onclick=()=>{eye=[0,0,0];yaw=0;pitch=0};
+$("fullscreen").onclick=()=>document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen();
+canvas.onpointerdown=e=>{canvas.setPointerCapture(e.pointerId);drag=[e.clientX,e.clientY]};
+canvas.onpointerup=()=>drag=null;canvas.onpointermove=e=>{if(document.pointerLockElement===canvas){yaw-=e.movementX*.0025;pitch=Math.max(-1.5,Math.min(1.5,pitch-e.movementY*.0025));return}
+ if(!drag)return;const dx=e.clientX-drag[0],dy=e.clientY-drag[1];drag=[e.clientX,e.clientY];
+ yaw-=dx*.004;pitch=Math.max(-1.5,Math.min(1.5,pitch-dy*.004))};
+canvas.ondblclick=()=>canvas.requestPointerLock();onkeydown=e=>keys[e.code]=true;onkeyup=e=>keys[e.code]=false;
+connect();rebuildGrid();requestAnimationFrame(draw);
+</script>
+</body>
+</html>

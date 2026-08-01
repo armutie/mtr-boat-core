@@ -10,12 +10,11 @@ create a real hardware, safety, or computation boundary.
 GNSS driver ------> /gnss/fix          sensor_msgs/NavSatFix
 IMU driver -------> /imu/data_raw      sensor_msgs/Imu
 camera driver ----> /camera/image_raw  sensor_msgs/Image
-                 -> /camera/camera_info
 LiDAR driver -----> /lidar/points      sensor_msgs/PointCloud2
 ```
 
-GNSS, IMU, and camera are implemented in `boat_ros`. The LiDAR entry defines
-the interface its existing driver should meet when added.
+GNSS, IMU, and camera are implemented in `boat_ros`. The LiDAR driver is
+implemented in the bundled `seyond_mapping` package.
 
 ## Camera contract
 
@@ -54,6 +53,32 @@ after measuring the installed pose.
 
 No placeholder calibration is published. Add `/camera/camera_info` only after
 calibrating the real lens at the selected resolution.
+
+The Seyond D1-R integration uses the `seyond_pointcloud_node` executable from
+the `seyond_mapping` package. Its public contract is:
+
+```text
+topic:       /lidar/points
+type:        sensor_msgs/msg/PointCloud2
+frame:       lidar_link
+QoS:         sensor-data (best effort, volatile)
+fields:      x, y, z, intensity, time
+coordinates: REP-103 X=forward, Y=left, Z=up
+timestamp:   Orange Pi acquisition time
+```
+
+The SDK's native X=up, Y=right, Z=forward coordinates are converted inside the
+driver. Per-point `time` remains relative within a frame for scan deskewing.
+Until the D1-R is synchronized to the boat clock, the PointCloud2 header uses
+the Orange Pi acquisition time so it can be combined with IMU, GNSS, radar,
+and camera messages.
+
+LiDAR startup is disabled by default and enabled with `enable_lidar:=true`.
+The fixed `base_link -> lidar_link` transform is controlled separately by
+`publish_lidar_tf`, which is also false by default. Measure the LiDAR origin
+relative to the boat reference point before enabling the transform, then set
+`lidar_x`, `lidar_y`, `lidar_z`, `lidar_roll`, `lidar_pitch`, and `lidar_yaw`
+at launch. Distances are metres and angles are radians.
 
 ## Design rules
 

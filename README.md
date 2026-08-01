@@ -18,6 +18,7 @@ incremental migration.
 - Run the current hardware test directly from Python scripts.
 - Publish GNSS, IMU, and radar data through ROS 2 nodes.
 - Publish a UVC camera on `/camera/image_raw` and serve a browser livestream.
+- Publish the Seyond D1-R as `/lidar/points` (`PointCloud2`) in `lidar_link`.
 - Visualize radar/navigation state with pygame or the browser dashboard.
 
 ## Layout
@@ -100,6 +101,42 @@ measured `camera_x`, `camera_y`, `camera_z`, `camera_roll`, `camera_pitch`, and
 `camera_yaw`. Distances are metres and angles are radians. Camera calibration
 is not yet available, so `/camera/camera_info` is intentionally not published
 until real intrinsics and distortion coefficients are measured.
+
+## LiDAR Integration
+
+The LiDAR node is provided by the bundled `ros2/seyond_mapping` package.
+`dependencies.repos` pins the external Seyond SDK and KISS-ICP inputs to exact
+commits. The bootstrap script imports them into one configurable ROS workspace,
+builds the original SDK without modifying its demo, then explicitly discovers
+and builds both ROS packages in this repository.
+
+Create a reproducible workspace on the Orange Pi:
+
+```bash
+sudo apt update
+sudo apt install python3-colcon-common-extensions python3-vcstool
+
+MTR_WS=/path/to/mtr_ws
+mkdir -p "$MTR_WS/src"
+git clone https://github.com/armutie/mtr-boat-core.git \
+  "$MTR_WS/src/mtr-boat-core"
+"$MTR_WS/src/mtr-boat-core/scripts/bootstrap_ros2_workspace.sh" "$MTR_WS"
+source "$MTR_WS/install/setup.bash"
+ros2 launch mtr_boat_core sensors.launch.py
+```
+
+LiDAR startup is opt-in so a disconnected sensor does not affect the default
+boat launch. For a LiDAR-only hardware check:
+
+```bash
+ros2 launch mtr_boat_core sensors.launch.py \
+  enable_gnss:=false enable_imu:=false enable_lidar:=true
+```
+
+The `base_link -> lidar_link` transform is separately opt-in. Measure the real
+LiDAR mounting pose before enabling it. For example, a sensor 25 cm forward
+and 40 cm above `base_link` would use `publish_lidar_tf:=true lidar_x:=0.25
+lidar_z:=0.40`; those numbers are illustrative, not boat measurements.
 
 ## ESP32 Firmware
 
@@ -369,7 +406,9 @@ python3 scripts/run_nav_esp32.py --forward-max-us 1525 --log
 
 ## ROS 2 Mode
 
-From a ROS 2 workspace:
+For the complete sensor workspace, use the pinned bootstrap described near the
+top of this README. For development without the external LiDAR package, the
+boat package alone can still be built from a ROS 2 workspace:
 
 ```bash
 mkdir -p ~/ros2_ws/src
@@ -421,6 +460,8 @@ Published topics:
 
 - `gnss/fix` (`sensor_msgs/NavSatFix`)
 - `imu/data_raw` (`sensor_msgs/Imu`)
+- `/camera/image_raw` (`sensor_msgs/Image`)
+- `/lidar/points` (`sensor_msgs/PointCloud2`)
 - `radar/raw_points` (`sensor_msgs/PointCloud2`)
 - `radar/filtered_points` (`sensor_msgs/PointCloud2`)
 - `radar/clusters_json` (`std_msgs/String`)
@@ -478,7 +519,6 @@ boat_ros/radar_nav_node.py
 
 Missing before ROS 2 becomes the main autonomous runtime:
 
-- Integrate the existing LiDAR `PointCloud2` publisher and a camera driver.
 - Define a sensor-independent perception output instead of coupling control to radar.
 - Add a safety/command node and a thruster node with exclusive ESP32 ownership.
 - Replace radar JSON control messages with typed, sensor-independent messages.
