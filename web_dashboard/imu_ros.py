@@ -81,6 +81,13 @@ def quaternion_to_euler_deg(
     return tuple(math.degrees(value) for value in (roll, pitch, yaw))
 
 
+def diagnostic_level_value(value) -> int:
+    """Normalize ROS uint8 diagnostic levels across rclpy versions."""
+    if isinstance(value, (bytes, bytearray)):
+        return value[0] if value else 0
+    return int(value)
+
+
 class RosImuReader:
     """Collect the BNO055 ROS topic set into one dashboard snapshot."""
 
@@ -353,11 +360,12 @@ class RosImuReader:
             except (KeyError, TypeError, ValueError):
                 return None
 
+        level = diagnostic_level_value(diagnostic.level)
         status = (
             "error"
-            if int(diagnostic.level) >= 2
+            if level >= 2
             else "calibrating"
-            if int(diagnostic.level) == 1
+            if level == 1
             else "ready"
         )
         with self._lock:

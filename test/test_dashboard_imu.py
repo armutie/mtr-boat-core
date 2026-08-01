@@ -76,7 +76,9 @@ class DashboardImuTests(unittest.TestCase):
                 status=[
                     SimpleNamespace(
                         name="BNO055 IMU",
-                        level=1,
+                        # Humble may expose diagnostic_msgs/DiagnosticStatus
+                        # uint8 fields as a single byte rather than an int.
+                        level=b"\x01",
                         message="calibration incomplete",
                         values=[
                             SimpleNamespace(
