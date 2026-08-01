@@ -7,14 +7,34 @@ create a real hardware, safety, or computation boundary.
 ## Initial sensor graph
 
 ```text
-GNSS driver ------> /gnss/fix          sensor_msgs/NavSatFix
-IMU driver -------> /imu/data_raw      sensor_msgs/Imu
-camera driver ----> /camera/image_raw  sensor_msgs/Image
-LiDAR driver -----> /lidar/points      sensor_msgs/PointCloud2
+GNSS driver --------> /gnss/fix          sensor_msgs/NavSatFix
+IMU driver ---------> /imu/data_raw      sensor_msgs/Imu
+BNO055 auxiliary ---> /imu/mag           sensor_msgs/MagneticField
+                    -> /imu/temperature  sensor_msgs/Temperature
+                    -> /imu/linear_acceleration
+                    -> /imu/gravity      geometry_msgs/Vector3Stamped
+                    -> /diagnostics      diagnostic_msgs/DiagnosticArray
+BNO055 optional ----> /imu/data          sensor_msgs/Imu
+camera driver ------> /camera/image_raw  sensor_msgs/Image
+LiDAR driver --------> /lidar/points      sensor_msgs/PointCloud2
 ```
 
-GNSS, IMU, and camera are implemented in `boat_ros`. The LiDAR driver is
-implemented in the bundled `seyond_mapping` package.
+GNSS, MPU-6050, BNO055, and camera nodes are implemented in `boat_ros`. The
+LiDAR driver is implemented in the bundled `seyond_mapping` package. The
+MPU-6050 remains the default IMU; select the BNO055 explicitly with
+`imu_driver:=bno055`.
+
+The BNO055 node owns I2C bus 2/address `0x29`, selects NDOF fusion, and configures
+Bosch's Android-format orientation output. Raw acceleration, angular velocity,
+and magnetic field data form the default ROS contract. Publishing the
+device-fused quaternion on `/imu/data` is disabled by default because its
+world-frame and mounting convention must be validated on the installed board
+before navigation uses it. Calibration status is part of the runtime health
+contract rather than being inferred from plausible-looking orientation values.
+
+The configurable `base_link -> imu_link` transform is also disabled by default.
+Measure the IMU pose and validate its axes before setting
+`publish_imu_tf:=true`.
 
 ## Camera contract
 

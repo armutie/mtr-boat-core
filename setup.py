@@ -41,6 +41,7 @@ setup(
     license="MIT",
     entry_points={
         "console_scripts": [
+            "bno055_node = boat_ros.bno055_node:main",
             "camera_node = boat_ros.camera_node:main",
             "gnss_node = boat_ros.gnss_node:main",
             "imu_node = boat_ros.imu_node:main",

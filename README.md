@@ -12,6 +12,7 @@ incremental migration.
 - Read TI xWR18xx mmWave radar frames over UART.
 - Read basic GNSS receivers that output NMEA over serial.
 - Read MPU-6050 IMU accel/gyro data over I2C.
+- Read BNO055 9-axis data and fused orientation over I2C.
 - Filter and cluster radar points into obstacle evidence.
 - Produce simple navigation output: throttle, steering, command, and reason.
 - Send gentle ESC PWM commands to an ESP32 over serial for basic thruster tests.
@@ -25,7 +26,7 @@ incremental migration.
 
 - `radar_nav/`: core non-ROS radar/navigation logic. Scripts and ROS nodes both use this.
 - `gnss/`: `pynmea2`-based NMEA parsing for USB/serial GNSS receivers.
-- `imu/`: MPU-6050 I2C reader for accel/gyro samples.
+- `imu/`: testable MPU-6050 and BNO055 I2C drivers.
 - `boat_ros/`: thin ROS 2 wrappers for boat sensors and radar navigation.
 - `thruster_control/`: ESP32 serial and ESC PWM mapping helpers.
 - `scripts/`: runnable robot/development commands.
@@ -427,17 +428,48 @@ cp src/mtr-boat-core/config/ros/boat.example.yaml \
   src/mtr-boat-core/config/ros/boat.local.yaml
 ```
 
-Start the GNSS and IMU publishers together:
+Start the GNSS and default MPU-6050 publishers together:
 
 ```bash
 ros2 launch mtr_boat_core sensors.launch.py \
   params_file:="$(pwd)/src/mtr-boat-core/config/ros/boat.local.yaml"
 ```
 
-Either sensor can be disabled for bench work:
+For a BNO055 bench test, select it explicitly. The ROS parameters match the
+current wiring assumption: I2C bus `2`, address `0x29`.
+
+```bash
+ros2 launch mtr_boat_core sensors.launch.py \
+  params_file:="$(pwd)/src/mtr-boat-core/config/ros/boat.local.yaml" \
+  imu_driver:=bno055
+```
+
+The node verifies the chip ID, resets stale volatile state, selects NDOF
+fusion, and publishes raw acceleration, angular velocity, magnetic field,
+temperature, gravity, gravity-removed acceleration, and calibration status.
+The reset makes startup deterministic but requires calibration after each node
+start. Set `reset_on_start: false` only when intentionally preserving the
+sensor's current volatile calibration.
+
+The BNO055 device quaternion uses Bosch's Android-format convention and is not
+assumed to be a REP-103 ENU orientation for the installed board. `/imu/data`
+therefore remains disabled until `publish_fused_orientation: true` is set in
+the local parameter file after a physical axis and heading validation.
+
+Either sensor group can be disabled for bench work:
 
 ```bash
 ros2 launch mtr_boat_core sensors.launch.py enable_imu:=false
+```
+
+After measuring the IMU pose relative to `base_link` in metres and radians,
+publish its static transform explicitly:
+
+```bash
+ros2 launch mtr_boat_core sensors.launch.py \
+  publish_imu_tf:=true \
+  imu_x:=0.0 imu_y:=0.0 imu_z:=0.0 \
+  imu_roll:=0.0 imu_pitch:=0.0 imu_yaw:=0.0
 ```
 
 Run the radar UART publisher:
@@ -459,7 +491,13 @@ ros2 run mtr_boat_core radar_nav_node
 Published topics:
 
 - `gnss/fix` (`sensor_msgs/NavSatFix`)
+- `imu/data` (`sensor_msgs/Imu`, optional BNO055 device-fused orientation)
 - `imu/data_raw` (`sensor_msgs/Imu`)
+- `imu/mag` (`sensor_msgs/MagneticField`)
+- `imu/temperature` (`sensor_msgs/Temperature`)
+- `imu/linear_acceleration` (`geometry_msgs/Vector3Stamped`, gravity removed)
+- `imu/gravity` (`geometry_msgs/Vector3Stamped`)
+- `/diagnostics` (`diagnostic_msgs/DiagnosticArray`, BNO055 calibration and system status)
 - `/camera/image_raw` (`sensor_msgs/Image`)
 - `/lidar/points` (`sensor_msgs/PointCloud2`)
 - `radar/raw_points` (`sensor_msgs/PointCloud2`)
@@ -485,8 +523,33 @@ the sensor publishers:
 
 ```bash
 ros2 topic hz /gnss/fix
+ros2 topic hz /imu/data
 ros2 topic hz /imu/data_raw
+ros2 topic echo /imu/mag --once
+ros2 topic echo /diagnostics
 ```
+
+The BNO055 calibration values range from `0` (uncalibrated) to `3` (fully
+calibrated). Keep the board still briefly for gyro calibration, place it in six
+stable orientations for the accelerometer, and move it through figure-eight
+paths for the magnetometer. Do not use absolute heading for navigation until
+the diagnostic reports all four calibration values at `3`. The default
+covariances are deliberately unknown (`0.0`); measure them on the installed
+boat before feeding the data into a state estimator.
+
+For a human-readable bench view without ROS, run the live BNO055 test directly
+on the Orange Pi:
+
+```bash
+python3 scripts/test_bno055_live.py
+```
+
+It prints the device quaternion, mounting-dependent roll/pitch/yaw,
+acceleration including gravity, gravity-removed linear acceleration, gyro
+rate, magnetic field in microtesla, temperature, and all four calibration
+levels. Use `--duration-s 30` for a finite run or `--no-reset` to preserve the
+current volatile calibration. Treat the displayed orientation as diagnostic
+until its axes and heading have been checked against the installed board.
 
 ## ROS 2 Roadmap
 
@@ -506,6 +569,12 @@ boat_ros/gnss_node.py
 
 boat_ros/imu_node.py
   -> publishes imu/data_raw
+
+boat_ros/bno055_node.py
+  -> publishes imu/data_raw, imu/mag, imu/temperature
+  -> publishes imu/linear_acceleration, imu/gravity
+  -> optionally publishes device-fused orientation on imu/data
+  -> publishes BNO055 calibration and health on /diagnostics
 
 boat_ros/radar_uart_node.py
   -> publishes radar/raw_points

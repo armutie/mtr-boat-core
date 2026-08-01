@@ -1,7 +1,11 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import (
+    LaunchConfiguration,
+    PathJoinSubstitution,
+    PythonExpression,
+)
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
@@ -14,6 +18,29 @@ def generate_launch_description() -> LaunchDescription:
     params_file = LaunchConfiguration("params_file")
     enable_gnss = LaunchConfiguration("enable_gnss")
     enable_imu = LaunchConfiguration("enable_imu")
+    imu_driver = LaunchConfiguration("imu_driver")
+    publish_imu_tf = LaunchConfiguration("publish_imu_tf")
+    base_frame_id = LaunchConfiguration("base_frame_id")
+    imu_frame_id = LaunchConfiguration("imu_frame_id")
+    imu_x = LaunchConfiguration("imu_x")
+    imu_y = LaunchConfiguration("imu_y")
+    imu_z = LaunchConfiguration("imu_z")
+    imu_roll = LaunchConfiguration("imu_roll")
+    imu_pitch = LaunchConfiguration("imu_pitch")
+    imu_yaw = LaunchConfiguration("imu_yaw")
+
+    def imu_driver_enabled(driver: str) -> IfCondition:
+        return IfCondition(
+            PythonExpression(
+                [
+                    "'",
+                    enable_imu,
+                    "'.lower() == 'true' and '",
+                    imu_driver,
+                    f"' == '{driver}'",
+                ]
+            )
+        )
     enable_camera = LaunchConfiguration("enable_camera")
     publish_camera_tf = LaunchConfiguration("publish_camera_tf")
     camera_x = LaunchConfiguration("camera_x")
@@ -31,6 +58,18 @@ def generate_launch_description() -> LaunchDescription:
     lidar_pitch = LaunchConfiguration("lidar_pitch")
     lidar_yaw = LaunchConfiguration("lidar_yaw")
 
+    imu_transform_enabled = IfCondition(
+        PythonExpression(
+            [
+                "'",
+                enable_imu,
+                "'.lower() == 'true' and '",
+                publish_imu_tf,
+                "'.lower() == 'true'",
+            ]
+        )
+    )
+
     return LaunchDescription(
         [
             DeclareLaunchArgument(
@@ -40,6 +79,24 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument("enable_gnss", default_value="true"),
             DeclareLaunchArgument("enable_imu", default_value="true"),
+            DeclareLaunchArgument(
+                "imu_driver",
+                default_value="mpu6050",
+                description="IMU implementation: bno055 or mpu6050",
+            ),
+            DeclareLaunchArgument(
+                "publish_imu_tf",
+                default_value="false",
+                description="Publish the measured base_link to imu_link transform",
+            ),
+            DeclareLaunchArgument("base_frame_id", default_value="base_link"),
+            DeclareLaunchArgument("imu_frame_id", default_value="imu_link"),
+            DeclareLaunchArgument("imu_x", default_value="0.0"),
+            DeclareLaunchArgument("imu_y", default_value="0.0"),
+            DeclareLaunchArgument("imu_z", default_value="0.0"),
+            DeclareLaunchArgument("imu_roll", default_value="0.0"),
+            DeclareLaunchArgument("imu_pitch", default_value="0.0"),
+            DeclareLaunchArgument("imu_yaw", default_value="0.0"),
             DeclareLaunchArgument("enable_camera", default_value="true"),
             DeclareLaunchArgument(
                 "publish_camera_tf",
@@ -77,8 +134,40 @@ def generate_launch_description() -> LaunchDescription:
                 executable="imu_node",
                 name="imu_node",
                 output="screen",
-                parameters=[params_file],
-                condition=IfCondition(enable_imu),
+                parameters=[params_file, {"frame_id": imu_frame_id}],
+                condition=imu_driver_enabled("mpu6050"),
+            ),
+            Node(
+                package="mtr_boat_core",
+                executable="bno055_node",
+                name="bno055_node",
+                output="screen",
+                parameters=[params_file, {"frame_id": imu_frame_id}],
+                condition=imu_driver_enabled("bno055"),
+            ),
+            Node(
+                package="tf2_ros",
+                executable="static_transform_publisher",
+                name="imu_static_transform",
+                arguments=[
+                    "--x",
+                    imu_x,
+                    "--y",
+                    imu_y,
+                    "--z",
+                    imu_z,
+                    "--roll",
+                    imu_roll,
+                    "--pitch",
+                    imu_pitch,
+                    "--yaw",
+                    imu_yaw,
+                    "--frame-id",
+                    base_frame_id,
+                    "--child-frame-id",
+                    imu_frame_id,
+                ],
+                condition=imu_transform_enabled,
             ),
             Node(
                 package="mtr_boat_core",

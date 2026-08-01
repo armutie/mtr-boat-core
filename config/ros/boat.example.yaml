@@ -18,6 +18,33 @@ imu_node:
     calibration_samples: 200
     calibration_delay_s: 0.01
 
+bno055_node:
+  ros__parameters:
+    bus: 2
+    address: "0x29"
+    placement: P1
+    # Reset makes startup deterministic but clears volatile calibration.
+    reset_on_start: true
+    frame_id: imu_link
+    # Keep the Bosch device quaternion off the standard fused topic until its
+    # mounting and world-frame convention are verified on the installed boat.
+    publish_fused_orientation: false
+    data_topic: imu/data
+    raw_topic: imu/data_raw
+    magnetic_field_topic: imu/mag
+    temperature_topic: imu/temperature
+    linear_acceleration_topic: imu/linear_acceleration
+    gravity_topic: imu/gravity
+    diagnostics_topic: /diagnostics
+    publish_rate_hz: 50.0
+    status_rate_hz: 1.0
+    # Zero covariance means unknown. Replace these with measured variances
+    # before using the BNO055 in a state estimator.
+    orientation_variance: [0.0, 0.0, 0.0]
+    angular_velocity_variance: [0.0, 0.0, 0.0]
+    linear_acceleration_variance: [0.0, 0.0, 0.0]
+    magnetic_field_variance: [0.0, 0.0, 0.0]
+
 camera_node:
   ros__parameters:
     device: /dev/mtr_camera
