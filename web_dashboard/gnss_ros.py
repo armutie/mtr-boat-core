@@ -43,12 +43,21 @@ class RosGnssReader:
         self._latest = empty_gnss_record()
         self._last_fix_at: float | None = None
         self._error: str | None = None
+        self._stop_event = threading.Event()
+        self._context = None
         self._thread = threading.Thread(
             target=self._spin_ros,
             daemon=True,
             name="ros-gnss-reader",
         )
         self._thread.start()
+
+    def shutdown(self) -> None:
+        self._stop_event.set()
+        context = self._context
+        if context is not None and context.ok():
+            context.shutdown()
+        self._thread.join(timeout=2.0)
 
     def snapshot(self) -> tuple[str, dict]:
         now = time.time()
@@ -109,19 +118,27 @@ class RosGnssReader:
                 )
 
         context = rclpy.context.Context()
+        self._context = context
+        node = None
+        executor = None
         try:
             rclpy.init(context=context)
-            node = DashboardGnssNode(context=context)
-            executor = SingleThreadedExecutor(context=context)
-            try:
+            if not self._stop_event.is_set():
+                node = DashboardGnssNode(context=context)
+                executor = SingleThreadedExecutor(context=context)
                 rclpy.spin(node, executor=executor)
-            finally:
-                executor.shutdown()
-                node.destroy_node()
-                rclpy.shutdown(context=context)
         except Exception as exc:
-            with self._lock:
-                self._error = f"ROS2 GNSS subscriber failed: {exc}"
+            if not self._stop_event.is_set():
+                with self._lock:
+                    self._error = f"ROS2 GNSS subscriber failed: {exc}"
+        finally:
+            if executor is not None:
+                executor.shutdown()
+            if node is not None:
+                node.destroy_node()
+            if context.ok():
+                rclpy.shutdown(context=context)
+            self._context = None
 
     def _on_fix(self, message) -> None:
         now = time.time()

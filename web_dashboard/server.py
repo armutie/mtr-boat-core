@@ -239,8 +239,17 @@ class RosMmwaveState:
         self._record: dict | None = None
         self._last_at: float | None = None
         self._error: str | None = None
+        self._stop_event = threading.Event()
+        self._context = None
         self._thread = threading.Thread(target=self._spin_ros, daemon=True)
         self._thread.start()
+
+    def shutdown(self) -> None:
+        self._stop_event.set()
+        context = self._context
+        if context is not None and context.ok():
+            context.shutdown()
+        self._thread.join(timeout=2.0)
 
     def snapshot(self) -> dict:
         now = time.time()
@@ -286,19 +295,27 @@ class RosMmwaveState:
                 node_self.get_logger().info(f"Dashboard subscribed to {outer.nav_state_topic}")
 
         context = rclpy.context.Context()
+        self._context = context
+        node = None
+        executor = None
         try:
             rclpy.init(context=context)
-            node = DashboardRosNode(self, context=context)
-            executor = SingleThreadedExecutor(context=context)
-            try:
+            if not self._stop_event.is_set():
+                node = DashboardRosNode(self, context=context)
+                executor = SingleThreadedExecutor(context=context)
                 rclpy.spin(node, executor=executor)
-            finally:
-                executor.shutdown()
-                node.destroy_node()
-                rclpy.shutdown(context=context)
         except Exception as exc:
-            with self._lock:
-                self._error = f"ROS2 dashboard subscriber failed: {exc}"
+            if not self._stop_event.is_set():
+                with self._lock:
+                    self._error = f"ROS2 dashboard subscriber failed: {exc}"
+        finally:
+            if executor is not None:
+                executor.shutdown()
+            if node is not None:
+                node.destroy_node()
+            if context.ok():
+                rclpy.shutdown(context=context)
+            self._context = None
 
     def _on_nav_state(self, msg) -> None:
         try:
@@ -1783,12 +1800,19 @@ def main() -> None:
         print(f"Logging: {log_paths}")
     try:
         server.serve_forever()
+    except KeyboardInterrupt:
+        pass
     finally:
+        server.server_close()
         if local_auto_controller is not None:
             local_auto_controller.shutdown()
         if session_logger is not None:
             session_logger.shutdown()
         actuator_bridge.shutdown()
+        for reader in (mmwave_state, gnss_reader, imu_reader):
+            shutdown = getattr(reader, "shutdown", None)
+            if shutdown is not None:
+                shutdown()
 
 
 if __name__ == "__main__":

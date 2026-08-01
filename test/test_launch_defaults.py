@@ -116,6 +116,19 @@ class BoatLaunchDefaultsTests(unittest.TestCase):
     def test_full_runtime_keeps_thrusters_disabled(self) -> None:
         self.assertEqual(self.launch_default("enable_thruster"), "false")
 
+    def test_dashboard_uses_ros_package_executable_path(self) -> None:
+        launch_source = Path("launch/boat.launch.py").read_text(
+            encoding="utf-8",
+        )
+        self.assertIn(
+            'FindPackagePrefix("mtr_boat_core")',
+            launch_source,
+        )
+        self.assertNotIn(
+            'FindExecutable(name="web_dashboard")',
+            launch_source,
+        )
+
 
 class Bno055DefaultsTests(unittest.TestCase):
     def test_fused_orientation_is_published_for_the_dashboard(self) -> None:

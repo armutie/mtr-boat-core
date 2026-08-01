@@ -7,12 +7,11 @@ from launch.actions import (
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import (
-    FindExecutable,
     LaunchConfiguration,
     PathJoinSubstitution,
 )
 from launch_ros.actions import Node
-from launch_ros.substitutions import FindPackageShare
+from launch_ros.substitutions import FindPackagePrefix, FindPackageShare
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -112,7 +111,14 @@ def generate_launch_description() -> LaunchDescription:
             ),
             ExecuteProcess(
                 cmd=[
-                    FindExecutable(name="web_dashboard"),
+                    PathJoinSubstitution(
+                        [
+                            FindPackagePrefix("mtr_boat_core"),
+                            "lib",
+                            "mtr_boat_core",
+                            "web_dashboard",
+                        ]
+                    ),
                     "--config",
                     dashboard_config,
                 ],
