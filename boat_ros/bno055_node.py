@@ -9,7 +9,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu, MagneticField, Temperature
 
-from imu import Bno055
+from imu import Bno055, RecoveringBno055
 
 
 def covariance_diagonal(values: list[float]) -> list[float]:
@@ -52,6 +52,9 @@ class Bno055Node(Node):
         self.declare_parameter("diagnostics_topic", "/diagnostics")
         self.declare_parameter("publish_rate_hz", 50.0)
         self.declare_parameter("status_rate_hz", 1.0)
+        self.declare_parameter("recovery_failure_threshold", 5)
+        self.declare_parameter("recovery_initial_delay_s", 1.0)
+        self.declare_parameter("recovery_max_delay_s", 30.0)
         self.declare_parameter("orientation_variance", [0.0, 0.0, 0.0])
         self.declare_parameter("angular_velocity_variance", [0.0, 0.0, 0.0])
         self.declare_parameter("linear_acceleration_variance", [0.0, 0.0, 0.0])
@@ -114,12 +117,43 @@ class Bno055Node(Node):
             10,
         )
 
-        self.imu = Bno055(
+        initial_imu = Bno055(
             bus=bus,
             address=address,
             placement=placement,
             reset_on_start=reset_on_start,
         )
+        self.imu = RecoveringBno055(
+            initial_imu,
+            lambda: Bno055(
+                bus=bus,
+                address=address,
+                placement=placement,
+                reset_on_start=True,
+            ),
+            failure_threshold=max(
+                int(
+                    self.get_parameter(
+                        "recovery_failure_threshold"
+                    ).value
+                ),
+                1,
+            ),
+            initial_retry_delay_s=max(
+                float(
+                    self.get_parameter("recovery_initial_delay_s").value
+                ),
+                0.1,
+            ),
+            max_retry_delay_s=max(
+                float(self.get_parameter("recovery_max_delay_s").value),
+                float(
+                    self.get_parameter("recovery_initial_delay_s").value
+                ),
+                0.1,
+            ),
+        )
+        self._last_recovery_count = 0
         self._last_error_log_s = 0.0
 
         publish_rate_hz = max(
@@ -151,11 +185,25 @@ class Bno055Node(Node):
         return covariance_diagonal(values)
 
     def publish_data(self) -> None:
+        was_recovering = self.imu.recovering
         try:
             sample = self.imu.read_sample()
         except Exception as exc:
+            if self.imu.recovering and not was_recovering:
+                self.get_logger().warning(
+                    "BNO055 reached "
+                    f"{self.imu.failure_threshold} consecutive read failures; "
+                    "starting automatic reinitialization"
+                )
             self._log_read_error(exc)
             return
+
+        if self.imu.recovery_count > self._last_recovery_count:
+            self._last_recovery_count = self.imu.recovery_count
+            self.get_logger().info(
+                "BNO055 automatic reinitialization succeeded; "
+                "resuming sensor publication"
+            )
 
         stamp = self.get_clock().now().to_msg()
 
@@ -235,49 +283,89 @@ class Bno055Node(Node):
         diagnostic.name = "BNO055 IMU"
         diagnostic.hardware_id = self.hardware_id
 
-        try:
-            status = self.imu.read_status()
-        except Exception as exc:
+        if self.imu.recovering:
             diagnostic.level = DiagnosticStatus.ERROR
-            diagnostic.message = f"status read failed: {exc}"
+            diagnostic.message = "automatic recovery pending"
+            diagnostic.values = self._recovery_diagnostic_values()
         else:
-            if status.system_error:
+            try:
+                status = self.imu.read_status()
+            except Exception as exc:
                 diagnostic.level = DiagnosticStatus.ERROR
-                diagnostic.message = f"system error {status.system_error}"
-            elif not status.fully_calibrated:
-                diagnostic.level = DiagnosticStatus.WARN
-                diagnostic.message = "calibration incomplete"
+                diagnostic.message = f"status read failed: {exc}"
+                diagnostic.values = self._recovery_diagnostic_values()
             else:
-                diagnostic.level = DiagnosticStatus.OK
-                diagnostic.message = "fully calibrated"
+                if status.system_error:
+                    diagnostic.level = DiagnosticStatus.ERROR
+                    diagnostic.message = (
+                        f"system error {status.system_error}"
+                    )
+                elif not status.fully_calibrated:
+                    diagnostic.level = DiagnosticStatus.WARN
+                    diagnostic.message = "calibration incomplete"
+                else:
+                    diagnostic.level = DiagnosticStatus.OK
+                    diagnostic.message = "fully calibrated"
 
-            diagnostic.values = [
-                KeyValue(
-                    key="system_calibration",
-                    value=str(status.system_calibration),
-                ),
-                KeyValue(
-                    key="gyroscope_calibration",
-                    value=str(status.gyroscope_calibration),
-                ),
-                KeyValue(
-                    key="accelerometer_calibration",
-                    value=str(status.accelerometer_calibration),
-                ),
-                KeyValue(
-                    key="magnetometer_calibration",
-                    value=str(status.magnetometer_calibration),
-                ),
-                KeyValue(key="system_status", value=str(status.system_status)),
-                KeyValue(key="system_error", value=str(status.system_error)),
-                KeyValue(
-                    key="fused_orientation_published",
-                    value=str(self.publish_fused_orientation).lower(),
-                ),
-            ]
+                diagnostic.values = [
+                    KeyValue(
+                        key="system_calibration",
+                        value=str(status.system_calibration),
+                    ),
+                    KeyValue(
+                        key="gyroscope_calibration",
+                        value=str(status.gyroscope_calibration),
+                    ),
+                    KeyValue(
+                        key="accelerometer_calibration",
+                        value=str(status.accelerometer_calibration),
+                    ),
+                    KeyValue(
+                        key="magnetometer_calibration",
+                        value=str(status.magnetometer_calibration),
+                    ),
+                    KeyValue(
+                        key="system_status",
+                        value=str(status.system_status),
+                    ),
+                    KeyValue(
+                        key="system_error",
+                        value=str(status.system_error),
+                    ),
+                    KeyValue(
+                        key="fused_orientation_published",
+                        value=str(self.publish_fused_orientation).lower(),
+                    ),
+                    *self._recovery_diagnostic_values(),
+                ]
 
         message.status = [diagnostic]
         self.diagnostics_publisher.publish(message)
+
+    def _recovery_diagnostic_values(self) -> list[KeyValue]:
+        return [
+            KeyValue(
+                key="automatic_recovery",
+                value="active" if self.imu.recovering else "ready",
+            ),
+            KeyValue(
+                key="consecutive_read_failures",
+                value=str(self.imu.consecutive_failures),
+            ),
+            KeyValue(
+                key="recovery_attempts",
+                value=str(self.imu.recovery_attempts),
+            ),
+            KeyValue(
+                key="successful_recoveries",
+                value=str(self.imu.recovery_count),
+            ),
+            KeyValue(
+                key="retry_in_seconds",
+                value=f"{self.imu.retry_in_s:.1f}",
+            ),
+            KeyValue(key="last_read_error", value=self.imu.last_error),
+        ]
 
     def _log_read_error(self, exc: Exception) -> None:
         now = time.monotonic()

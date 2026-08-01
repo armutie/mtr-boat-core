@@ -1,0 +1,23 @@
+[Unit]
+Description=MTR boat ROS 2 runtime
+Wants=NetworkManager.service
+After=NetworkManager.service systemd-udev-settle.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=@MTR_USER@
+Group=@MTR_GROUP@
+SupplementaryGroups=dialout video i2c
+WorkingDirectory=@REPO_ROOT@
+ExecStartPre=/usr/bin/udevadm settle --timeout=15
+ExecStart=@REPO_ROOT@/scripts/run_boat_service.sh
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=20
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

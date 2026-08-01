@@ -81,6 +81,156 @@ class Bno055ReadError(Bno055Error):
     pass
 
 
+class Bno055RecoveryPending(Bno055Error):
+    pass
+
+
+class Bno055Device(Protocol):
+    def read_sample(self) -> Bno055Sample: ...
+
+    def read_status(self) -> Bno055Status: ...
+
+    def close(self) -> None: ...
+
+
+class RecoveringBno055:
+    """Reconnect and reconfigure a BNO055 after repeated read failures."""
+
+    def __init__(
+        self,
+        imu: Bno055Device,
+        factory: Callable[[], Bno055Device],
+        *,
+        failure_threshold: int = 5,
+        initial_retry_delay_s: float = 1.0,
+        max_retry_delay_s: float = 30.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if failure_threshold < 1:
+            raise ValueError("failure_threshold must be at least 1")
+        if initial_retry_delay_s <= 0:
+            raise ValueError("initial_retry_delay_s must be positive")
+        if max_retry_delay_s < initial_retry_delay_s:
+            raise ValueError(
+                "max_retry_delay_s must be at least initial_retry_delay_s"
+            )
+
+        self._imu: Bno055Device | None = imu
+        self._factory = factory
+        self._failure_threshold = failure_threshold
+        self._initial_retry_delay_s = initial_retry_delay_s
+        self._max_retry_delay_s = max_retry_delay_s
+        self._retry_delay_s = initial_retry_delay_s
+        self._clock = clock
+        self._next_retry_s = 0.0
+        self._closed = False
+
+        self.consecutive_failures = 0
+        self.recovery_attempts = 0
+        self.recovery_count = 0
+        self.last_error = ""
+
+    @property
+    def failure_threshold(self) -> int:
+        return self._failure_threshold
+
+    @property
+    def recovering(self) -> bool:
+        return self._imu is None and not self._closed
+
+    @property
+    def retry_in_s(self) -> float:
+        if not self.recovering:
+            return 0.0
+        return max(self._next_retry_s - self._clock(), 0.0)
+
+    def read_sample(self) -> Bno055Sample:
+        imu = self._require_imu()
+        try:
+            sample = imu.read_sample()
+        except Exception as exc:
+            self._record_read_failure(exc)
+            raise
+
+        self.consecutive_failures = 0
+        self.last_error = ""
+        return sample
+
+    def read_status(self) -> Bno055Status:
+        if self.recovering:
+            raise Bno055RecoveryPending(self._pending_message())
+        if self._imu is None:
+            raise Bno055RecoveryPending("BNO055 driver is closed")
+        return self._imu.read_status()
+
+    def _require_imu(self) -> Bno055Device:
+        if self._closed:
+            raise Bno055RecoveryPending("BNO055 driver is closed")
+        if self._imu is not None:
+            return self._imu
+
+        now = self._clock()
+        if now < self._next_retry_s:
+            raise Bno055RecoveryPending(self._pending_message())
+
+        self.recovery_attempts += 1
+        try:
+            imu = self._factory()
+        except Exception as exc:
+            self.last_error = str(exc)
+            retry_delay_s = self._retry_delay_s
+            self._next_retry_s = now + retry_delay_s
+            self._retry_delay_s = min(
+                retry_delay_s * 2.0,
+                self._max_retry_delay_s,
+            )
+            raise Bno055RecoveryPending(
+                f"BNO055 reinitialization failed: {exc}; retrying in "
+                f"{retry_delay_s:.1f}s"
+            ) from exc
+
+        self._imu = imu
+        self.consecutive_failures = 0
+        self.recovery_count += 1
+        self.last_error = ""
+        self._retry_delay_s = self._initial_retry_delay_s
+        self._next_retry_s = 0.0
+        return imu
+
+    def _record_read_failure(self, exc: Exception) -> None:
+        self.consecutive_failures += 1
+        self.last_error = str(exc)
+        if self.consecutive_failures < self._failure_threshold:
+            return
+
+        imu = self._imu
+        self._imu = None
+        self._next_retry_s = self._clock()
+        if imu is not None:
+            try:
+                imu.close()
+            except Exception:
+                pass
+
+    def _pending_message(self) -> str:
+        message = "BNO055 automatic recovery pending"
+        if self.last_error:
+            message += f" after: {self.last_error}"
+        retry_in_s = self.retry_in_s
+        if retry_in_s > 0:
+            message += f"; retrying in {retry_in_s:.1f}s"
+        return message
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        imu = self._imu
+        self._imu = None
+        if imu is not None:
+            imu.close()
+
+
 class Bno055:
     """Read BNO055 I2C data in SI units using the Bosch Android format."""
 

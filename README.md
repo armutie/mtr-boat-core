@@ -121,6 +121,103 @@ Camera viewer:
 http://<orange-pi-ip>:8081/
 ```
 
+## Headless water testing
+
+The tested Orange Pi has a second Wi-Fi interface (`wlan1`) configured as the
+`MTR-Boat` access point. NetworkManager and SSH are enabled at boot, so no
+router, internet connection, monitor, or keyboard is required on the boat.
+The access point uses the fixed Orange Pi address `10.42.0.1`.
+
+After powering the boat, wait 60–90 seconds, connect the laptop to
+`MTR-Boat`, and open an SSH session:
+
+```bash
+ssh uwmtr@10.42.0.1
+```
+
+### Automatic safe startup
+
+Install the boat runtime as a system service once:
+
+```bash
+cd /home/uwmtr/mtr-boat-core-foundation
+sudo ./scripts/install_systemd_service.sh
+sudo systemctl start mtr-boat
+```
+
+The service starts automatically after future boots and restarts the launch
+process after a failure. It starts the ESP32 serial owner, but both the control
+supervisor and dashboard initialize in `off` mode and continuously command
+neutral `1500/1500`. Movement still requires explicitly selecting manual or
+auto control and supplying fresh commands. With the service installed, normal
+headless operation is simply:
+
+1. Power the boat and wait 60–90 seconds.
+2. Connect the laptop to `MTR-Boat`.
+3. Open `http://10.42.0.1:8080`.
+
+SSH is optional for checking status and logs:
+
+```bash
+ssh uwmtr@10.42.0.1
+systemctl status mtr-boat
+journalctl -u mtr-boat -f
+```
+
+After pulling software changes, rebuild and restart:
+
+```bash
+cd /home/uwmtr/mtr-boat-core-foundation
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install
+sudo systemctl restart mtr-boat
+```
+
+### Manual fallback and thruster testing
+
+Stop the automatic service before starting another launch:
+
+```bash
+sudo systemctl stop mtr-boat
+```
+
+Start the runtime inside `tmux` so it survives an SSH or Wi-Fi interruption:
+
+```bash
+tmux new -s boat
+cd /home/uwmtr/mtr-boat-core-foundation
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 launch mtr_boat_core boat.launch.py
+```
+
+Detach with `Ctrl+B`, then `D`. Reattach later with:
+
+```bash
+tmux attach -t boat
+```
+
+Open the dashboard and camera from the laptop:
+
+```text
+http://10.42.0.1:8080
+http://10.42.0.1:8081
+```
+
+The hotspot, SSH, and installed `mtr-boat` service start automatically after
+reboot. A manual `tmux` session does not. Never run a manual boat launch beside
+the service because both would try to own the same hardware.
+
+The ESP32 bridge is available in the boot service, but control remains
+off/neutral until deliberately armed from the dashboard. Stop the service
+before using a separate manual ROS launch or a direct serial bench tool.
+
+Before a water test, perform a complete headless cold-boot rehearsal using the
+actual boat battery and power converter. Remove the monitor, keyboard, and wall
+power; confirm the hotspot, SSH, launch, sensors, and dashboards; then run for
+at least 15–30 minutes to detect power or USB instability. Wi-Fi loss is not an
+emergency stop: always retain a physical motor cutoff and retrieval plan.
+
 Basic checks:
 
 ```bash

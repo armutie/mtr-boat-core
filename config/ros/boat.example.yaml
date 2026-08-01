@@ -42,6 +42,10 @@ bno055_node:
     diagnostics_topic: /diagnostics
     publish_rate_hz: 50.0
     status_rate_hz: 1.0
+    # Reinitialize and restore NDOF mode after a transient reset or I2C fault.
+    recovery_failure_threshold: 5
+    recovery_initial_delay_s: 1.0
+    recovery_max_delay_s: 30.0
     # Zero covariance means unknown. Replace these with measured variances
     # before using the BNO055 in a state estimator.
     orientation_variance: [0.0, 0.0, 0.0]
