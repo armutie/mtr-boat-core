@@ -21,8 +21,8 @@ LiDAR driver --------> /lidar/points      sensor_msgs/PointCloud2
 
 GNSS, MPU-6050, BNO055, and camera nodes are implemented in `boat_ros`. The
 LiDAR driver is implemented in the bundled `seyond_mapping` package. The
-MPU-6050 remains the default IMU; select the BNO055 explicitly with
-`imu_driver:=bno055`.
+BNO055 is the default IMU; select the MPU-6050 with
+`imu_driver:=mpu6050`.
 
 The BNO055 node owns I2C bus 2/address `0x29`, selects NDOF fusion, and configures
 Bosch's Android-format orientation output. Raw acceleration, angular velocity,

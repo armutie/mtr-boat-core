@@ -21,8 +21,8 @@ thruster-control boundary is still in development.
 | Device | ROS interface | Status |
 | --- | --- | --- |
 | Serial GNSS | `/gnss/fix` | Enabled by default |
-| MPU-6050 | `/imu/data_raw` | Default IMU |
-| BNO055 | IMU, magnetic field, temperature, diagnostics | Opt-in; fused orientation disabled pending physical validation |
+| BNO055 | IMU, magnetic field, temperature, diagnostics | Default IMU; fused orientation disabled pending physical validation |
+| MPU-6050 | `/imu/data_raw` | Available with `imu_driver:=mpu6050` |
 | Arducam UVC | `/camera/image_raw` and port 8081 viewer | Enabled by default |
 | Seyond D1-R | `/lidar/points` | Opt-in |
 | TI xWR18xx radar | `/radar/raw_points` | Separate ROS node |
@@ -61,7 +61,7 @@ cp ~/mtr_ws/src/mtr-boat-core/config/ros/boat.example.yaml \
 nano ~/mtr_ws/src/mtr-boat-core/config/ros/boat.local.yaml
 ```
 
-Launch the default GNSS, MPU-6050, and camera nodes:
+Launch the default GNSS, BNO055, and camera nodes:
 
 ```bash
 cd ~/mtr_ws
@@ -75,9 +75,9 @@ LiDAR and all measured mounting transforms are disabled by default.
 ## Common launch modes
 
 ```bash
-# BNO055 instead of MPU-6050
+# MPU-6050 instead of BNO055
 ros2 launch mtr_boat_core sensors.launch.py \
-  params_file:="$PARAMS" imu_driver:=bno055
+  params_file:="$PARAMS" imu_driver:=mpu6050
 
 # Enable the Seyond LiDAR
 ros2 launch mtr_boat_core sensors.launch.py \

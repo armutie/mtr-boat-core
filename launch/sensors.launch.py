@@ -81,7 +81,7 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("enable_imu", default_value="true"),
             DeclareLaunchArgument(
                 "imu_driver",
-                default_value="mpu6050",
+                default_value="bno055",
                 description="IMU implementation: bno055 or mpu6050",
             ),
             DeclareLaunchArgument(
