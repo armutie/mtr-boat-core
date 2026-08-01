@@ -36,31 +36,39 @@ incremental migration.
 hardware and navigation logic testable outside the ROS graph while the robot
 runtime is migrated incrementally.
 
-The LiDAR node is provided by the adjacent `seyond_mapping` ROS package built
-from the Seyond SDK integration. Source both package overlays before launching
-the boat sensors.
+The LiDAR node is provided by the bundled `ros2/seyond_mapping` package.
+`dependencies.repos` pins the external Seyond SDK and KISS-ICP inputs to exact
+commits. The bootstrap script imports them into one configurable ROS workspace,
+builds the original SDK without modifying its demo, then explicitly discovers
+and builds both ROS packages in this repository.
 
-Build and launch on the Orange Pi:
+Create a reproducible workspace on the Orange Pi:
 
 ```bash
-source /opt/ros/humble/setup.bash
-source ~/lidar/inno-lidar-sdk/ros2_mapping_ws/install/setup.bash
-colcon build --symlink-install
-source install/setup.bash
+sudo apt update
+sudo apt install python3-colcon-common-extensions python3-vcstool
+
+MTR_WS=/path/to/mtr_ws
+mkdir -p "$MTR_WS/src"
+git clone https://github.com/armutie/mtr-boat-core.git \
+  "$MTR_WS/src/mtr-boat-core"
+"$MTR_WS/src/mtr-boat-core/scripts/bootstrap_ros2_workspace.sh" "$MTR_WS"
+source "$MTR_WS/install/setup.bash"
 ros2 launch mtr_boat_core sensors.launch.py
 ```
 
-For a LiDAR-only hardware check:
+LiDAR startup is opt-in so a disconnected sensor does not affect the default
+boat launch. For a LiDAR-only hardware check:
 
 ```bash
 ros2 launch mtr_boat_core sensors.launch.py \
-  enable_gnss:=false enable_imu:=false
+  enable_gnss:=false enable_imu:=false enable_lidar:=true
 ```
 
-Measure the real LiDAR mounting pose before field use. For example, a sensor
-25 cm forward and 40 cm above `base_link` would be launched with
-`lidar_x:=0.25 lidar_z:=0.40`; those numbers are illustrative, not boat
-measurements.
+The `base_link -> lidar_link` transform is separately opt-in. Measure the real
+LiDAR mounting pose before enabling it. For example, a sensor 25 cm forward
+and 40 cm above `base_link` would use `publish_lidar_tf:=true lidar_x:=0.25
+lidar_z:=0.40`; those numbers are illustrative, not boat measurements.
 
 ## ESP32 Firmware
 
@@ -330,7 +338,9 @@ python3 scripts/run_nav_esp32.py --forward-max-us 1525 --log
 
 ## ROS 2 Mode
 
-From a ROS 2 workspace:
+For the complete sensor workspace, use the pinned bootstrap described near the
+top of this README. For development without the external LiDAR package, the
+boat package alone can still be built from a ROS 2 workspace:
 
 ```bash
 mkdir -p ~/ros2_ws/src

@@ -1,0 +1,59 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 1
+      Class: rviz_default_plugins/PointCloud2
+      Color Transformer: Intensity
+      Enabled: true
+      Name: Live points
+      Position Transformer: XYZ
+      Size (Pixels): 2
+      Style: Points
+      Topic:
+        Value: /seyond/points
+    - Alpha: 1
+      Class: rviz_default_plugins/PointCloud2
+      Color: 120; 220; 120
+      Color Transformer: FlatColor
+      Enabled: true
+      Name: Accumulated map
+      Position Transformer: XYZ
+      Size (Pixels): 2
+      Style: Points
+      Topic:
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        Value: /mapping/map
+    - Class: rviz_default_plugins/TF
+      Enabled: true
+      Name: TF
+    - Class: rviz_default_plugins/Odometry
+      Enabled: true
+      Name: KISS odometry
+      Topic:
+        Value: /kiss/odometry
+  Global Options:
+    Background Color: 30; 30; 30
+    Fixed Frame: odom_lidar
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 12
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0
+      Pitch: 0.45
+      Yaw: 0.8
+Window Geometry:
+  Height: 900
+  Width: 1400

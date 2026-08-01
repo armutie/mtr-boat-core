@@ -15,6 +15,7 @@ def generate_launch_description() -> LaunchDescription:
     enable_gnss = LaunchConfiguration("enable_gnss")
     enable_imu = LaunchConfiguration("enable_imu")
     enable_lidar = LaunchConfiguration("enable_lidar")
+    publish_lidar_tf = LaunchConfiguration("publish_lidar_tf")
     lidar_x = LaunchConfiguration("lidar_x")
     lidar_y = LaunchConfiguration("lidar_y")
     lidar_z = LaunchConfiguration("lidar_z")
@@ -31,7 +32,12 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument("enable_gnss", default_value="true"),
             DeclareLaunchArgument("enable_imu", default_value="true"),
-            DeclareLaunchArgument("enable_lidar", default_value="true"),
+            DeclareLaunchArgument("enable_lidar", default_value="false"),
+            DeclareLaunchArgument(
+                "publish_lidar_tf",
+                default_value="false",
+                description="Publish the measured base_link to lidar_link transform",
+            ),
             DeclareLaunchArgument("lidar_x", default_value="0.0"),
             DeclareLaunchArgument("lidar_y", default_value="0.0"),
             DeclareLaunchArgument("lidar_z", default_value="0.0"),
@@ -86,7 +92,7 @@ def generate_launch_description() -> LaunchDescription:
                     "--child-frame-id",
                     "lidar_link",
                 ],
-                condition=IfCondition(enable_lidar),
+                condition=IfCondition(publish_lidar_tf),
             ),
         ]
     )
