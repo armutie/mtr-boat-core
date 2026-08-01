@@ -1,0 +1,2 @@
+# Arducam UC684 UVC camera: use the capture interface, not its metadata node.
+SUBSYSTEM=="video4linux", ATTRS{idVendor}=="0c45", ATTRS{idProduct}=="0261", ATTRS{serial}=="UC684", ATTR{index}=="0", SYMLINK+="mtr_camera"

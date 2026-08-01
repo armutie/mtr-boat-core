@@ -18,6 +18,21 @@ imu_node:
     calibration_samples: 200
     calibration_delay_s: 0.01
 
+camera_node:
+  ros__parameters:
+    device: /dev/mtr_camera
+    width: 1280
+    height: 720
+    fps: 30.0
+    frame_id: camera_optical_frame
+    topic: /camera/image_raw
+    publish_ros: true
+    enable_web: true
+    web_bind: 0.0.0.0
+    web_port: 8081
+    web_rotation_deg: 0
+    reconnect_delay_s: 2.0
+
 seyond_pointcloud_node:
   ros__parameters:
     lidar_ip: "172.168.1.10"

@@ -31,6 +31,7 @@ setup(
         (f"share/{package_name}/launch", glob("launch/*.launch.py")),
         (f"share/{package_name}/config", glob("config/ros/*.yaml")),
         (f"share/{package_name}/config/radar", glob("config/radar/*.cfg")),
+        (f"share/{package_name}/config/udev", glob("config/udev/*.rules")),
     ],
     install_requires=["pynmea2", "pyserial", "setuptools", "smbus2"],
     zip_safe=True,
@@ -40,6 +41,7 @@ setup(
     license="MIT",
     entry_points={
         "console_scripts": [
+            "camera_node = boat_ros.camera_node:main",
             "gnss_node = boat_ros.gnss_node:main",
             "imu_node = boat_ros.imu_node:main",
             "radar_uart_node = boat_ros.radar_uart_node:main",

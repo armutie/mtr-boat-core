@@ -17,6 +17,7 @@ incremental migration.
 - Send gentle ESC PWM commands to an ESP32 over serial for basic thruster tests.
 - Run the current hardware test directly from Python scripts.
 - Publish GNSS, IMU, and radar data through ROS 2 nodes.
+- Publish a UVC camera on `/camera/image_raw` and serve a browser livestream.
 - Publish the Seyond D1-R as `/lidar/points` (`PointCloud2`) in `lidar_link`.
 - Visualize radar/navigation state with pygame or the browser dashboard.
 
@@ -35,6 +36,73 @@ incremental migration.
 `radar_nav/` remains usable without ROS 2. The wrappers in `boat_ros/` keep
 hardware and navigation logic testable outside the ROS graph while the robot
 runtime is migrated incrementally.
+
+## Camera Livestream
+
+The camera node uses the Arducam's native MJPEG capture mode at 1280x720 and
+30 FPS by default. It publishes decoded `sensor_msgs/Image` frames using
+sensor-data QoS and serves the latest frames directly to browsers. Depth
+estimation is deliberately outside this low-latency path.
+
+Build and launch a camera-only test on the Orange Pi:
+
+```bash
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install
+source install/setup.bash
+ros2 launch mtr_boat_core sensors.launch.py \
+  enable_gnss:=false enable_imu:=false
+```
+
+Install the included udev rule once so reconnects and USB enumeration changes
+do not move the camera between `/dev/video*` names:
+
+```bash
+sudo cp config/udev/99-mtr-camera.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules
+sudo udevadm trigger --subsystem-match=video4linux
+ls -l /dev/mtr_camera
+```
+
+The rule identifies the tested Arducam UC684 by vendor, product, serial, and
+capture-interface index. A replacement camera with different USB identifiers
+needs a corresponding rule update. A stable `/dev/v4l/by-id/` path may also be
+set in the ROS YAML when the device provides one.
+
+Open the fullscreen viewer from any device on the same network:
+
+```text
+http://<orange-pi-ip>:8081/
+```
+
+Useful endpoints are `/stream.mjpg`, `/snapshot.jpg`, and `/health`. The node
+keeps running if the USB camera is unplugged and reconnects automatically when
+`/dev/mtr_camera` returns. Cached JPEG data and its timestamp are cleared on
+disconnect, so the snapshot and stream remain unavailable until a fresh frame
+arrives. If a temporary bench setup is sideways, set
+`web_rotation_deg` in the ROS YAML to `90`, `180`, or `270`; this rotates only
+the browser presentation and leaves the ROS image geometry unchanged.
+
+The web server is optional. Set `enable_web: false` in the ROS YAML to publish
+ROS images without opening an HTTP port. A bind failure also disables only the
+web viewer; camera capture and `/camera/image_raw` continue.
+
+> The default `0.0.0.0:8081` viewer has no authentication and sends permissive
+> CORS headers. Use it only on a trusted boat LAN. Bind to `127.0.0.1`, add a
+> firewall/reverse proxy, or disable the web server on an untrusted network.
+
+The supported launch path sets `PYTHONNOUSERSITE=1`, keeping Ubuntu's
+`python3-opencv` on its matching system NumPy ABI without modifying
+process-global `sys.path`.
+
+Measure the physical camera pose before field use. The mount transform is
+disabled by default; publish it only with `publish_camera_tf:=true` plus the
+measured `camera_x`, `camera_y`, `camera_z`, `camera_roll`, `camera_pitch`, and
+`camera_yaw`. Distances are metres and angles are radians. Camera calibration
+is not yet available, so `/camera/camera_info` is intentionally not published
+until real intrinsics and distortion coefficients are measured.
+
+## LiDAR Integration
 
 The LiDAR node is provided by the bundled `ros2/seyond_mapping` package.
 `dependencies.repos` pins the external Seyond SDK and KISS-ICP inputs to exact
@@ -392,6 +460,8 @@ Published topics:
 
 - `gnss/fix` (`sensor_msgs/NavSatFix`)
 - `imu/data_raw` (`sensor_msgs/Imu`)
+- `/camera/image_raw` (`sensor_msgs/Image`)
+- `/lidar/points` (`sensor_msgs/PointCloud2`)
 - `radar/raw_points` (`sensor_msgs/PointCloud2`)
 - `radar/filtered_points` (`sensor_msgs/PointCloud2`)
 - `radar/clusters_json` (`std_msgs/String`)
@@ -449,7 +519,6 @@ boat_ros/radar_nav_node.py
 
 Missing before ROS 2 becomes the main autonomous runtime:
 
-- Integrate the existing LiDAR `PointCloud2` publisher and a camera driver.
 - Define a sensor-independent perception output instead of coupling control to radar.
 - Add a safety/command node and a thruster node with exclusive ESP32 ownership.
 - Replace radar JSON control messages with typed, sensor-independent messages.
