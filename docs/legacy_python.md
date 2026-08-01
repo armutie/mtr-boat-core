@@ -52,6 +52,9 @@ Open `http://<orange-pi-ip>:8080` from a device on the same trusted network.
 Use `--demo` without hardware, or `--ros --mmwave-topic
 radar/nav_state_json` for the ROS radar feed.
 
+The dashboard subscribes to the BNO055 ROS topics by default. Pass `--imu`
+only when intentionally bench-testing the legacy MPU-6050 directly over I2C.
+
 Without `--ros-control`, the legacy dashboard opens the configured ESP32 port
 directly. Use `--actuator-dry-run` for a direct-Python bench test with no motor
 output.

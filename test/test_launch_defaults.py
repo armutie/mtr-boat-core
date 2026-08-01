@@ -34,6 +34,12 @@ class SensorLaunchDefaultsTests(unittest.TestCase):
     def test_bno055_is_the_default_imu(self) -> None:
         self.assertEqual(self.launch_default("imu_driver"), "bno055")
 
+    def test_bno055_fused_orientation_is_enabled(self) -> None:
+        self.assertEqual(
+            self.launch_default("publish_fused_orientation"),
+            "true",
+        )
+
     def test_unmeasured_sensor_transforms_remain_disabled(self) -> None:
         for argument in (
             "publish_imu_tf",
@@ -73,6 +79,14 @@ class ControlLaunchDefaultsTests(unittest.TestCase):
             self.assertEqual(default, "false")
             return
         self.fail("enable_thruster launch argument not found")
+
+
+class Bno055DefaultsTests(unittest.TestCase):
+    def test_fused_orientation_is_published_for_the_dashboard(self) -> None:
+        config = Path("config/ros/boat.example.yaml").read_text(
+            encoding="utf-8",
+        )
+        self.assertIn("publish_fused_orientation: true", config)
 
 
 if __name__ == "__main__":

@@ -26,11 +26,10 @@ BNO055 is the default IMU; select the MPU-6050 with
 
 The BNO055 node owns I2C bus 2/address `0x29`, selects NDOF fusion, and configures
 Bosch's Android-format orientation output. Raw acceleration, angular velocity,
-and magnetic field data form the default ROS contract. Publishing the
-device-fused quaternion on `/imu/data` is disabled by default because its
-world-frame and mounting convention must be validated on the installed board
-before navigation uses it. Calibration status is part of the runtime health
-contract rather than being inferred from plausible-looking orientation values.
+magnetic field, and the device-fused quaternion form the default ROS contract.
+The dashboard displays the quaternion and calibration state. Navigation must
+still validate the installed world-frame and mounting convention before it
+trusts absolute heading.
 
 The configurable `base_link -> imu_link` transform is also disabled by default.
 Measure the IMU pose and validate its axes before setting

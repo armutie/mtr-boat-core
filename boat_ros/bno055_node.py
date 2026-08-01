@@ -39,7 +39,7 @@ class Bno055Node(Node):
         self.declare_parameter("placement", "P1")
         self.declare_parameter("reset_on_start", True)
         self.declare_parameter("frame_id", "imu_link")
-        self.declare_parameter("publish_fused_orientation", False)
+        self.declare_parameter("publish_fused_orientation", True)
         self.declare_parameter("data_topic", "imu/data")
         self.declare_parameter("raw_topic", "imu/data_raw")
         self.declare_parameter("magnetic_field_topic", "imu/mag")

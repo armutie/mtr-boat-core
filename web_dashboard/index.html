@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>MTR Boat HUD</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <link rel="stylesheet" href="styles.css?v=control-v6" />
+    <link rel="stylesheet" href="styles.css?v=bno-v1" />
   </head>
   <body>
     <main class="deck">
@@ -216,7 +216,7 @@
                 <div class="panel-head compact">
                   <div>
                     <span class="panel-tag">IMU</span>
-                    <h2>Pitch</h2>
+                    <h2>Attitude</h2>
                   </div>
                   <span id="overview-imu-health" class="health-chip" data-health="waiting">waiting</span>
                 </div>
@@ -344,44 +344,73 @@
           <article class="panel detail-main" data-health="waiting">
             <div class="panel-head">
               <div>
-                <span class="panel-tag">IMU</span>
-                <h2>Attitude</h2>
+                <span class="panel-tag">BNO055</span>
+                <h2>Fused Attitude</h2>
               </div>
-              <span id="imu-health" class="health-chip" data-health="waiting">waiting</span>
+              <div class="command-stack">
+                <span id="imu-health" class="health-chip" data-health="waiting">waiting</span>
+                <strong id="imu-orientation-state">waiting for orientation</strong>
+              </div>
             </div>
             <div class="imu-stage">
               <canvas id="imu-attitude" width="470" height="470"></canvas>
-              <canvas id="imu-accel-trace" width="390" height="470"></canvas>
+              <div class="imu-motion-plot">
+                <div>
+                  <span class="panel-tag">Specific force</span>
+                  <strong id="imu-amag">--</strong>
+                </div>
+                <canvas id="imu-accel-trace" width="390" height="410"></canvas>
+              </div>
             </div>
           </article>
 
           <aside class="detail-side">
             <article class="panel stat-panel">
-              <span class="panel-tag">Acceleration</span>
+              <span class="panel-tag">Orientation</span>
               <div class="readout-grid">
-                <span>X <b id="imu-ax">--</b></span>
-                <span>Y <b id="imu-ay">--</b></span>
-                <span>Z <b id="imu-az">--</b></span>
-                <span>Mag <b id="imu-amag">--</b></span>
-              </div>
-            </article>
-            <article class="panel stat-panel">
-              <span class="panel-tag">Gyro</span>
-              <div class="bar-stack">
-                <label>X <i id="imu-gx-bar"></i><b id="imu-gx">--</b></label>
-                <label>Y <i id="imu-gy-bar"></i><b id="imu-gy">--</b></label>
-                <label>Z <i id="imu-gz-bar"></i><b id="imu-gz">--</b></label>
-              </div>
-            </article>
-            <article class="panel stat-panel">
-              <span class="panel-tag">State</span>
-              <div class="readout-grid">
+                <span>Roll <b id="imu-roll">--</b></span>
+                <span>Pitch <b id="imu-pitch">--</b></span>
                 <span>Yaw <b id="imu-yaw">--</b></span>
-                <span>dt <b id="imu-dt">--</b></span>
-                <span>Age <b id="imu-age">--</b></span>
-                <span>Source <b id="imu-source">--</b></span>
+                <span>Temp <b id="imu-temp">--</b></span>
               </div>
-              <p id="imu-bias" class="mono-line">bias --</p>
+            </article>
+            <article class="panel stat-panel">
+              <div class="panel-head compact">
+                <span class="panel-tag">Calibration</span>
+                <span id="imu-cal-status" class="tiny-chip">waiting</span>
+              </div>
+              <div class="bar-stack calibration-bars">
+                <label>System <i id="imu-cal-system-bar"></i><b id="imu-cal-system">--</b></label>
+                <label>Gyro <i id="imu-cal-gyro-bar"></i><b id="imu-cal-gyro">--</b></label>
+                <label>Accel <i id="imu-cal-accel-bar"></i><b id="imu-cal-accel">--</b></label>
+                <label>Mag <i id="imu-cal-mag-bar"></i><b id="imu-cal-mag">--</b></label>
+              </div>
+              <p id="imu-cal-message" class="mono-line">waiting for BNO055 diagnostics</p>
+            </article>
+            <article class="panel stat-panel">
+              <span class="panel-tag">Motion</span>
+              <div class="readout-grid">
+                <span>Accel X <b id="imu-ax">--</b></span>
+                <span>Accel Y <b id="imu-ay">--</b></span>
+                <span>Accel Z <b id="imu-az">--</b></span>
+                <span>Gyro X <b id="imu-gx">--</b></span>
+                <span>Gyro Y <b id="imu-gy">--</b></span>
+                <span>Gyro Z <b id="imu-gz">--</b></span>
+              </div>
+            </article>
+            <article class="panel stat-panel">
+              <span class="panel-tag">Magnetic field</span>
+              <div class="readout-grid">
+                <span>X <b id="imu-mx">--</b></span>
+                <span>Y <b id="imu-my">--</b></span>
+                <span>Z <b id="imu-mz">--</b></span>
+                <span>Strength <b id="imu-mstrength">--</b></span>
+              </div>
+              <div class="imu-source-line">
+                <span id="imu-frame">frame --</span>
+                <span id="imu-age">age --</span>
+              </div>
+              <p id="imu-source" class="mono-line">topic --</p>
             </article>
           </aside>
         </section>
@@ -389,6 +418,6 @@
     </main>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="app.js?v=control-v18"></script>
+    <script src="app.js?v=bno-v1"></script>
   </body>
 </html>

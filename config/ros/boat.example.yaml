@@ -26,9 +26,9 @@ bno055_node:
     # Reset makes startup deterministic but clears volatile calibration.
     reset_on_start: true
     frame_id: imu_link
-    # Keep the Bosch device quaternion off the standard fused topic until its
-    # mounting and world-frame convention are verified on the installed boat.
-    publish_fused_orientation: false
+    # The dashboard consumes this fused quaternion. Adjust placement after
+    # checking the installed board axes.
+    publish_fused_orientation: true
     data_topic: imu/data
     raw_topic: imu/data_raw
     magnetic_field_topic: imu/mag

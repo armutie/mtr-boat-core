@@ -7,6 +7,7 @@ from launch.substitutions import (
     PythonExpression,
 )
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -19,6 +20,9 @@ def generate_launch_description() -> LaunchDescription:
     enable_gnss = LaunchConfiguration("enable_gnss")
     enable_imu = LaunchConfiguration("enable_imu")
     imu_driver = LaunchConfiguration("imu_driver")
+    publish_fused_orientation = LaunchConfiguration(
+        "publish_fused_orientation"
+    )
     publish_imu_tf = LaunchConfiguration("publish_imu_tf")
     base_frame_id = LaunchConfiguration("base_frame_id")
     imu_frame_id = LaunchConfiguration("imu_frame_id")
@@ -85,6 +89,11 @@ def generate_launch_description() -> LaunchDescription:
                 description="IMU implementation: bno055 or mpu6050",
             ),
             DeclareLaunchArgument(
+                "publish_fused_orientation",
+                default_value="true",
+                description="Publish BNO055 orientation on /imu/data",
+            ),
+            DeclareLaunchArgument(
                 "publish_imu_tf",
                 default_value="false",
                 description="Publish the measured base_link to imu_link transform",
@@ -142,7 +151,16 @@ def generate_launch_description() -> LaunchDescription:
                 executable="bno055_node",
                 name="bno055_node",
                 output="screen",
-                parameters=[params_file, {"frame_id": imu_frame_id}],
+                parameters=[
+                    params_file,
+                    {
+                        "frame_id": imu_frame_id,
+                        "publish_fused_orientation": ParameterValue(
+                            publish_fused_orientation,
+                            value_type=bool,
+                        ),
+                    },
+                ],
                 condition=imu_driver_enabled("bno055"),
             ),
             Node(

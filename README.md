@@ -21,7 +21,7 @@ autonomous safety logic are still evolving.
 | Device | ROS interface | Status |
 | --- | --- | --- |
 | Serial GNSS | `/gnss/fix` | Enabled by default |
-| BNO055 | IMU, magnetic field, temperature, diagnostics | Default IMU; fused orientation disabled pending physical validation |
+| BNO055 | IMU, orientation, magnetic field, temperature, diagnostics | Default IMU and dashboard source |
 | MPU-6050 | `/imu/data_raw` | Available with `imu_driver:=mpu6050` |
 | Arducam UVC | `/camera/image_raw` and port 8081 viewer | Enabled by default |
 | Seyond D1-R | `/lidar/points` | Opt-in |
@@ -132,7 +132,7 @@ Manual dashboard control through ROS is documented in
 - Keep physical motor power disconnected during sensor-only tests.
 - Use a physical emergency cutoff during every thruster test.
 - Do not publish guessed sensor transforms.
-- Do not enable BNO055 fused orientation until its installed axes and heading
-  have been validated.
+- Validate the installed BNO055 axes and magnetic heading before autonomous
+  navigation trusts absolute orientation.
 - Only the ROS thruster node should own the ESP32 serial port during normal
   operation.

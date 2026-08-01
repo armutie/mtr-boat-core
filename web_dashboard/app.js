@@ -1035,7 +1035,7 @@ function startStopRetry() {
 
 function updateHistory(data) {
   const throttle = num(data?.mmwave?.control?.throttle);
-  const accel = num(data?.imu?.accel_mag_g);
+  const accel = num(data?.imu?.accel_mag_mps2);
   const lat = num(data?.gnss?.lat);
   const lon = num(data?.gnss?.lon);
   const mmHealth = healthOf(data, "mmwave");
@@ -1103,7 +1103,7 @@ function updateDom(data) {
   text("#overview-fix", gnss.fix || "--");
   text("#overview-sats", fmtInt(gnss.satellites));
   text("#overview-throttle", mmHealth === "live" ? `${fmt(control.throttle, 2)} / ${fmt(control.target_throttle, 2)}` : "-- / --");
-  text("#overview-accel", fmt(imu.accel_mag_g, 3, " g"));
+  text("#overview-accel", fmt(imu.accel_mag_mps2, 2, " m/s²"));
   setZone("#overview-zone-left", scores.left);
   setZone("#overview-zone-front", scores.front);
   setZone("#overview-zone-right", scores.right);
@@ -1141,22 +1141,43 @@ function updateDom(data) {
   text("#gnss-source", `source ${gnss.source || "--"}`);
   text("#session-logging", data.session?.logging ? `logging ${Object.values(data.session.log_paths || {}).join(" ")}` : "logging off");
 
-  text("#imu-ax", fmt(imu.accel_x_g, 3, " g"));
-  text("#imu-ay", fmt(imu.accel_y_g, 3, " g"));
-  text("#imu-az", fmt(imu.accel_z_g, 3, " g"));
-  text("#imu-amag", fmt(imu.accel_mag_g, 3, " g"));
-  text("#imu-gx", fmt(imu.gyro_x_dps, 1));
-  text("#imu-gy", fmt(imu.gyro_y_dps, 1));
-  text("#imu-gz", fmt(imu.gyro_z_dps, 1));
-  text("#imu-yaw", fmt(imu.yaw_relative_deg, 1, " deg"));
-  text("#imu-dt", fmt(imu.dt_s, 3, "s"));
-  text("#imu-age", fmtAge(imu.age_s));
-  text("#imu-source", imu.source || "--");
-  const bias = imu.bias || {};
-  text("#imu-bias", imu.error ? `error ${imu.error}` : `bias x ${fmt(bias.x_dps, 2)} y ${fmt(bias.y_dps, 2)} z ${fmt(bias.z_dps, 2)}`);
-  setBar("#imu-gx-bar", imuHealth === "live" ? Math.abs(num(imu.gyro_x_dps) ?? 0) : null, 0, 120, "var(--cyan)");
-  setBar("#imu-gy-bar", imuHealth === "live" ? Math.abs(num(imu.gyro_y_dps) ?? 0) : null, 0, 120, "var(--yellow)");
-  setBar("#imu-gz-bar", imuHealth === "live" ? Math.abs(num(imu.gyro_z_dps) ?? 0) : null, 0, 120, "var(--orange)");
+  const orientationAvailable = imu.orientation_available === true;
+  text("#imu-orientation-state", orientationAvailable ? "fused orientation" : "gravity only");
+  text("#imu-roll", orientationAvailable ? fmt(imu.roll_deg, 1, "°") : "--");
+  text("#imu-pitch", orientationAvailable ? fmt(imu.pitch_deg, 1, "°") : "--");
+  text("#imu-yaw", orientationAvailable ? fmt(imu.yaw_deg, 1, "°") : "--");
+  text("#imu-temp", fmt(imu.temperature_c, 1, " °C"));
+  text("#imu-amag", fmt(imu.accel_mag_mps2, 2, " m/s²"));
+  text("#imu-ax", fmt(imu.accel_x_mps2, 2, " m/s²"));
+  text("#imu-ay", fmt(imu.accel_y_mps2, 2, " m/s²"));
+  text("#imu-az", fmt(imu.accel_z_mps2, 2, " m/s²"));
+  text("#imu-gx", fmt(imu.gyro_x_rad_s, 3, " rad/s"));
+  text("#imu-gy", fmt(imu.gyro_y_rad_s, 3, " rad/s"));
+  text("#imu-gz", fmt(imu.gyro_z_rad_s, 3, " rad/s"));
+  text("#imu-mx", fmt(imu.mag_x_ut, 1, " µT"));
+  text("#imu-my", fmt(imu.mag_y_ut, 1, " µT"));
+  text("#imu-mz", fmt(imu.mag_z_ut, 1, " µT"));
+  text("#imu-mstrength", fmt(imu.mag_strength_ut, 1, " µT"));
+  text("#imu-age", `age ${fmtAge(imu.age_s)}`);
+  text("#imu-frame", `frame ${imu.frame_id || "--"}`);
+  text("#imu-source", imu.error ? `error ${imu.error}` : `topic ${imu.source || "--"}`);
+
+  const calibration = imu.calibration || {};
+  const calibrationRows = [
+    ["system", "#imu-cal-system", "#imu-cal-system-bar", "var(--cyan)"],
+    ["gyroscope", "#imu-cal-gyro", "#imu-cal-gyro-bar", "var(--yellow)"],
+    ["accelerometer", "#imu-cal-accel", "#imu-cal-accel-bar", "var(--orange)"],
+    ["magnetometer", "#imu-cal-mag", "#imu-cal-mag-bar", "var(--green)"],
+  ];
+  const calibrationStatus = calibration.status || "waiting";
+  text("#imu-cal-status", calibrationStatus);
+  $("#imu-cal-status")?.setAttribute("data-status", calibrationStatus);
+  text("#imu-cal-message", calibration.message || "waiting for BNO055 diagnostics");
+  calibrationRows.forEach(([key, valueId, barId, color]) => {
+    const value = num(calibration[key]);
+    text(valueId, value === null ? "--" : `${Math.round(value)}/3`);
+    setBar(barId, value, 0, 3, color);
+  });
 
   state.control.serverManual = manual;
   if (manual.limits) {
@@ -1659,19 +1680,32 @@ function drawAttitude(id, data, large = false) {
   if (!surface) return;
   const { ctx, w, h } = surface;
   const imu = data?.imu || {};
-  const ax = num(imu.accel_x_g) ?? 0;
-  const ay = num(imu.accel_y_g) ?? 0;
-  const az = num(imu.accel_z_g) ?? 1;
-  const yaw = num(imu.yaw_relative_deg) ?? 0;
+  const health = healthOf(data, "imu");
+  const orientationAvailable = imu.orientation_available === true;
+  const gx = num(imu.gravity_x_mps2) ?? num(imu.accel_x_mps2) ?? 0;
+  const gy = num(imu.gravity_y_mps2) ?? num(imu.accel_y_mps2) ?? 0;
+  const gz = num(imu.gravity_z_mps2) ?? num(imu.accel_z_mps2) ?? 1;
+  const fusedRoll = num(imu.roll_deg);
+  const fusedPitch = num(imu.pitch_deg);
+  const fusedYaw = num(imu.yaw_deg);
   const cx = w / 2;
   const cy = h / 2;
   const r = Math.min(w, h) / 2 - (large ? 28 : 14);
-  const pitch = Math.atan2(-ax, Math.sqrt(ay * ay + az * az));
-  const roll = Math.atan2(ay, az);
+  const pitch = orientationAvailable && fusedPitch !== null
+    ? (fusedPitch * Math.PI) / 180
+    : Math.atan2(-gx, Math.sqrt(gy * gy + gz * gz));
+  const roll = orientationAvailable && fusedRoll !== null
+    ? (fusedRoll * Math.PI) / 180
+    : Math.atan2(gy, gz);
+  const yaw = orientationAvailable ? fusedYaw : null;
   const dotX = cx + clamp(roll / 0.75, -1, 1) * r * 0.72;
   const dotY = cy + clamp(pitch / 0.75, -1, 1) * r * 0.72;
 
   clearCanvas(ctx, w, h);
+  if (health !== "live") {
+    drawEmptyHint(ctx, w, h, "BNO055 unavailable");
+    return;
+  }
   ctx.strokeStyle = colors.line;
   ctx.lineWidth = large ? 3 : 2;
   ctx.beginPath();
@@ -1686,16 +1720,18 @@ function drawAttitude(id, data, large = false) {
   ctx.lineTo(cx, cy + r);
   ctx.stroke();
 
-  ctx.save();
-  ctx.translate(cx, cy);
-  ctx.rotate((yaw * Math.PI) / 180);
-  ctx.strokeStyle = colors.teal;
-  ctx.lineWidth = large ? 5 : 3;
-  ctx.beginPath();
-  ctx.moveTo(0, -r * 0.82);
-  ctx.lineTo(0, r * 0.82);
-  ctx.stroke();
-  ctx.restore();
+  if (yaw !== null) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate((yaw * Math.PI) / 180);
+    ctx.strokeStyle = colors.teal;
+    ctx.lineWidth = large ? 5 : 3;
+    ctx.beginPath();
+    ctx.moveTo(0, -r * 0.82);
+    ctx.lineTo(0, r * 0.82);
+    ctx.stroke();
+    ctx.restore();
+  }
 
   ctx.fillStyle = colors.red;
   ctx.beginPath();
@@ -1703,7 +1739,8 @@ function drawAttitude(id, data, large = false) {
   ctx.fill();
   drawLabel(ctx, `P ${((pitch * 180) / Math.PI).toFixed(1)}`, large ? 24 : 10, h - (large ? 46 : 22), colors.yellow, large ? 18 : 11);
   drawLabel(ctx, `R ${((roll * 180) / Math.PI).toFixed(1)}`, large ? 24 : 10, h - (large ? 22 : 8), colors.teal, large ? 18 : 11);
-  drawLabel(ctx, `Y ${yaw.toFixed(1)}`, cx - (large ? 38 : 26), cy + 5, colors.ink, large ? 20 : 12);
+  drawLabel(ctx, yaw === null ? "Y --" : `Y ${yaw.toFixed(1)}`, cx - (large ? 38 : 26), cy + 5, colors.ink, large ? 20 : 12);
+  drawLabel(ctx, orientationAvailable ? "FUSED" : "GRAVITY", large ? 24 : 10, large ? 34 : 18, colors.muted, large ? 13 : 9);
 }
 
 function drawTrace(id, values, options = {}) {
@@ -1876,8 +1913,8 @@ function drawAll(data) {
   drawAttitude("attitude-overview", data, false);
   drawAttitude("imu-attitude", data, true);
   drawTrace("throttle-overview", state.throttle, { color: colors.green, min: 0, max: 1, step: 22, width: 2 });
-  drawTrace("accel-overview", state.accel, { color: colors.yellow, min: 0.85, max: 1.2, step: 22, width: 2 });
-  drawTrace("imu-accel-trace", state.accel, { color: colors.yellow, min: 0.75, max: 1.35, step: 42, width: 4 });
+  drawTrace("accel-overview", state.accel, { color: colors.yellow, min: 8.0, max: 12.0, step: 22, width: 2 });
+  drawTrace("imu-accel-trace", state.accel, { color: colors.yellow, min: 6.0, max: 14.0, step: 42, width: 4 });
 }
 
 function applySnapshot(data) {

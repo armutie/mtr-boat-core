@@ -19,9 +19,12 @@ REPO_ROOT = ROOT.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from web_dashboard.imu_ros import RosImuReader, empty_imu_record
+
+
 HOST = "0.0.0.0"
 PORT = 8080
-DASHBOARD_BUILD = "control-post-v1"
+DASHBOARD_BUILD = "bno-dashboard-v1"
 LINUX_TTY_CANDIDATES = [f"/dev/ttyACM{i}" for i in range(3)] + [f"/dev/ttyUSB{i}" for i in range(3)]
 WINDOWS_COM_CANDIDATES = [f"COM{i}" for i in range(1, 13)]
 
@@ -65,20 +68,7 @@ def default_gnss() -> dict:
 
 
 def default_imu() -> dict:
-    return {
-        "accel_x_g": None,
-        "accel_y_g": None,
-        "accel_z_g": None,
-        "accel_mag_g": None,
-        "gyro_x_dps": None,
-        "gyro_y_dps": None,
-        "gyro_z_dps": None,
-        "yaw_relative_deg": None,
-        "dt_s": None,
-        "age_s": None,
-        "source": None,
-        "bias": {"x_dps": 0.0, "y_dps": 0.0, "z_dps": 0.0},
-    }
+    return empty_imu_record()
 
 
 def base_snapshot(mode: str, started_at: float, log_paths: dict[str, str]) -> dict:
@@ -193,6 +183,37 @@ class DemoSensorState:
         }
         base["imu"] = {
             **default_imu(),
+            "accel_x_mps2": round(1.76 * math.sin(elapsed / 2.0), 3),
+            "accel_y_mps2": round(1.18 * math.cos(elapsed / 2.7), 3),
+            "accel_z_mps2": round(9.61 + 0.29 * math.sin(elapsed / 1.8), 3),
+            "accel_mag_mps2": round(9.81 + 0.29 * math.sin(elapsed / 1.8), 3),
+            "linear_accel_x_mps2": round(0.3 * math.sin(elapsed / 2.0), 3),
+            "linear_accel_y_mps2": round(0.2 * math.cos(elapsed / 2.7), 3),
+            "linear_accel_z_mps2": round(0.08 * math.sin(elapsed / 1.8), 3),
+            "gravity_x_mps2": 0.0,
+            "gravity_y_mps2": 0.0,
+            "gravity_z_mps2": 9.807,
+            "gyro_x_rad_s": round(0.07 * math.sin(elapsed / 3.0), 3),
+            "gyro_y_rad_s": round(0.05 * math.cos(elapsed / 4.0), 3),
+            "gyro_z_rad_s": round(0.31 * math.sin(elapsed / 5.0), 3),
+            "roll_deg": round(7.0 * math.sin(elapsed / 4.0), 1),
+            "pitch_deg": round(10.0 * math.sin(elapsed / 5.0), 1),
+            "yaw_deg": round((elapsed * 8.0) % 360.0, 1),
+            "orientation_available": True,
+            "mag_x_ut": round(18.0 + 2.0 * math.sin(elapsed / 4.0), 1),
+            "mag_y_ut": round(-4.0 + math.cos(elapsed / 3.0), 1),
+            "mag_z_ut": round(42.0 + 1.5 * math.sin(elapsed / 6.0), 1),
+            "mag_strength_ut": 45.9,
+            "temperature_c": 27.0,
+            "calibration": {
+                "system": 3,
+                "gyroscope": 3,
+                "accelerometer": 3,
+                "magnetometer": 3,
+                "status": "ready",
+                "message": "fully calibrated",
+            },
+            "frame_id": "imu_link",
             "accel_x_g": round(0.18 * math.sin(elapsed / 2.0), 3),
             "accel_y_g": round(0.12 * math.cos(elapsed / 2.7), 3),
             "accel_z_g": round(0.98 + 0.03 * math.sin(elapsed / 1.8), 3),
@@ -200,10 +221,10 @@ class DemoSensorState:
             "gyro_x_dps": round(4.0 * math.sin(elapsed / 3.0), 2),
             "gyro_y_dps": round(3.0 * math.cos(elapsed / 4.0), 2),
             "gyro_z_dps": round(18.0 * math.sin(elapsed / 5.0), 2),
-            "yaw_relative_deg": round(22.0 * math.sin(elapsed / 6.0), 1),
+            "yaw_relative_deg": round((elapsed * 8.0) % 360.0, 1),
             "dt_s": 0.03,
             "age_s": 0.0,
-            "source": "demo",
+            "source": "demo BNO055",
         }
         return base
 
@@ -637,6 +658,36 @@ class LiveImuReader:
                     record = sample.to_record()
                     record["yaw_relative_deg"] = yaw_relative_deg
                     record["dt_s"] = dt_s
+                    acceleration = tuple(
+                        float(record[key])
+                        for key in ("accel_x_g", "accel_y_g", "accel_z_g")
+                    )
+                    angular = tuple(
+                        float(record[key])
+                        for key in (
+                            "gyro_x_dps",
+                            "gyro_y_dps",
+                            "gyro_z_dps",
+                        )
+                    )
+                    record.update(
+                        {
+                            "accel_x_mps2": acceleration[0] * 9.80665,
+                            "accel_y_mps2": acceleration[1] * 9.80665,
+                            "accel_z_mps2": acceleration[2] * 9.80665,
+                            "accel_mag_mps2": math.sqrt(
+                                sum(value * value for value in acceleration)
+                            )
+                            * 9.80665,
+                            "gyro_x_rad_s": math.radians(angular[0]),
+                            "gyro_y_rad_s": math.radians(angular[1]),
+                            "gyro_z_rad_s": math.radians(angular[2]),
+                            "source": (
+                                f"legacy MPU-6050 i2c-{self.bus}:"
+                                f"0x{self.address:02x}"
+                            ),
+                        }
+                    )
                     if self.log is not None:
                         self.log.write(record)
                     latest = {
@@ -661,7 +712,7 @@ class DashboardState:
         self,
         mmwave_state,
         gnss_reader: "LiveGnssReader | None",
-        imu_reader: "LiveImuReader | None",
+        imu_reader: "LiveImuReader | RosImuReader | None",
         log_paths: dict[str, str],
         manual_slew_per_s: float = 0.0,
     ):
@@ -1414,11 +1465,11 @@ def main() -> None:
     parser.add_argument("--no-gnss", action="store_true", help="Do not auto-start GNSS serial mode")
     parser.add_argument("--gnss-port", help="GNSS serial port")
     parser.add_argument("--gnss-baud", type=int, help="GNSS serial baud")
-    parser.add_argument("--imu", action="store_true", help="Force MPU-6050 I2C mode")
-    parser.add_argument("--no-imu", action="store_true", help="Do not auto-start MPU-6050 I2C mode")
-    parser.add_argument("--imu-bus", type=int, help="IMU I2C bus")
-    parser.add_argument("--imu-address", help="IMU I2C address")
-    parser.add_argument("--imu-calibration-samples", type=int, default=200)
+    parser.add_argument("--imu", action="store_true", help="Use the legacy direct MPU-6050 reader")
+    parser.add_argument("--no-imu", action="store_true", help="Disable the ROS IMU feed")
+    parser.add_argument("--imu-bus", type=int, help="Legacy MPU-6050 I2C bus")
+    parser.add_argument("--imu-address", help="Legacy MPU-6050 I2C address")
+    parser.add_argument("--imu-calibration-samples", type=int, default=200, help="Legacy MPU-6050 gyro calibration samples")
     parser.add_argument("--log", action="store_true", help="Write raw live GNSS/IMU/mmWave JSONL logs in addition to the session log")
     parser.add_argument("--no-session-log", action="store_true", help="Disable the unified dashboard session JSONL log")
     parser.add_argument("--session-log-hz", type=float, help="Unified session log rate (Hz, default 10)")
@@ -1506,8 +1557,8 @@ def main() -> None:
         and _serial_device_present(gnss_port, _platform_candidates(LINUX_TTY_CANDIDATES))
     )
     use_gnss = args.gnss or bool(args.gnss_port) or auto_gnss
-    auto_imu = not args.demo and not args.no_imu
-    use_imu = args.imu or auto_imu
+    use_direct_imu = args.imu and not args.no_imu
+    use_ros_imu = not args.demo and not args.no_imu and not use_direct_imu
 
     modes = [args.demo, args.ros, use_direct_mmwave]
     if sum(1 for enabled in modes if enabled) > 1:
@@ -1549,11 +1600,19 @@ def main() -> None:
         if gnss_log is not None:
             log_paths["gnss"] = str(gnss_log.path)
         gnss_reader = LiveGnssReader(gnss_port, gnss_baud, gnss_log)
-    if use_imu:
+    if use_direct_imu or use_ros_imu:
         imu_log = JsonlLog(_log_path("imu")) if args.log else None
         if imu_log is not None:
             log_paths["imu"] = str(imu_log.path)
-        imu_reader = LiveImuReader(imu_bus, imu_address, imu_log, calibration_samples=args.imu_calibration_samples)
+        if use_direct_imu:
+            imu_reader = LiveImuReader(
+                imu_bus,
+                imu_address,
+                imu_log,
+                calibration_samples=args.imu_calibration_samples,
+            )
+        else:
+            imu_reader = RosImuReader(log=imu_log)
 
     STATE = DashboardState(
         mmwave_state,
@@ -1681,9 +1740,13 @@ def main() -> None:
         if auto_gnss and not args.gnss and not args.gnss_port:
             print("GNSS auto-started from detected serial device")
     if imu_reader is not None:
-        print(f"IMU: I2C bus {imu_bus}, address 0x{imu_address:02x}")
-        if auto_imu and not args.imu:
-            print("IMU auto-started from detected I2C device")
+        if use_direct_imu:
+            print(
+                f"IMU: legacy MPU-6050 on I2C bus {imu_bus}, "
+                f"address 0x{imu_address:02x}"
+            )
+        else:
+            print("IMU: ROS2 BNO055 topics under /imu")
     print(
         f"Telemetry: snapshot {SNAPSHOT_HZ:.0f} Hz / send {send_hz:.0f} Hz / "
         f"slew {manual_slew_per_s:.2f}/s"
