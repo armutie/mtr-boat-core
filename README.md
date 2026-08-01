@@ -435,6 +435,41 @@ ros2 launch mtr_boat_core sensors.launch.py \
   params_file:="$(pwd)/src/mtr-boat-core/config/ros/boat.local.yaml"
 ```
 
+### BNO055 wiring — Orange Pi 5 Plus
+
+The BNO055 uses the Orange Pi 5 Plus `I2C2_M0` pins. Shut down and disconnect
+power before changing the wiring. These are physical 40-pin header numbers,
+not GPIO or wiringOP numbers:
+
+| BNO055 breakout | Orange Pi 5 Plus header |
+| --- | --- |
+| `VIN` or `VCC` | Pin 1 — 3.3 V |
+| `SDA` | Pin 3 — I2C2_M0 SDA |
+| `SCL` | Pin 5 — I2C2_M0 SCL |
+| `GND` | Pin 6 — ground |
+
+Use the BNO055 breakout's power-input pin; do not connect a breakout pin marked
+`3Vo`, which is normally a regulator output. Do not use the Orange Pi's 5 V
+header pins for this connection. `RST` and `INT` are not required by the
+current driver.
+
+Enable `i2c2-m0` in `sudo orangepi-config` under **System → Hardware**, save,
+and reboot. Then verify the bus and sensor before launching ROS:
+
+```bash
+ls -l /dev/i2c-2
+sudo i2cdetect -y 2
+```
+
+The current configuration expects the sensor at I2C address `0x29`, so an idle
+bus scan should show `29`. This is an I2C address, not physical pin 29. If it
+shows `28`, update the BNO055 `address` in `config/ros/boat.local.yaml` instead
+of moving the SDA or SCL wires. Stop the ROS IMU node before scanning; an
+address already owned by a kernel driver can appear as `UU`.
+
+The official Orange Pi 5 Plus pinout and I2C overlay table are maintained in
+the [Orange Pi 5 Plus documentation](https://www.orangepi.org/orangepiwiki/index.php/Orange_Pi_5_Plus).
+
 For a BNO055 bench test, select it explicitly. The ROS parameters match the
 current wiring assumption: I2C bus `2`, address `0x29`.
 
