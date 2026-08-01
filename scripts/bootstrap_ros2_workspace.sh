@@ -1,24 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 1 ]]; then
-  echo "Usage: $0 /absolute/path/to/ros_workspace" >&2
+if [[ $# -ne 0 ]]; then
+  echo "Usage: $0" >&2
   exit 2
 fi
 
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-workspace_dir="$1"
-
-if [[ "${workspace_dir}" != /* ]]; then
-  echo "Workspace path must be absolute: ${workspace_dir}" >&2
-  exit 2
-fi
-
-expected_repo_dir="${workspace_dir}/src/mtr-boat-core"
-if [[ "${repo_dir}" != "${expected_repo_dir}" ]]; then
-  echo "Clone this repository at ${expected_repo_dir}, then rerun the script." >&2
-  exit 2
-fi
+workspace_dir="${repo_dir}"
 
 for command_name in vcs colcon cmake; do
   if ! command -v "${command_name}" >/dev/null 2>&1; then
@@ -34,7 +23,8 @@ if [[ ! -f "${ros_setup}" ]]; then
 fi
 
 mkdir -p "${workspace_dir}/src"
-vcs import "${workspace_dir}/src" < "${repo_dir}/dependencies.repos"
+vcs import --skip-existing \
+  "${workspace_dir}/src" < "${repo_dir}/dependencies.repos"
 
 sdk_dir="${workspace_dir}/src/inno-lidar-sdk"
 (

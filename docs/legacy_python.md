@@ -7,11 +7,11 @@ for isolated hardware tests, replay, and controller development.
 
 ```bash
 python3 -m pip install pyserial pynmea2 smbus2
-cp config/boat.example.json config/boat.local.json
 ```
 
-Edit `config/boat.local.json` with the real serial ports and I2C addresses. The
-local file is ignored by Git.
+The checked-in configuration uses the tested hardware aliases. Copy
+`config/boat.example.json` to `config/boat.local.json` only when a bench device
+or setting differs; the local file is ignored by Git.
 
 Stable device names after running `sudo ./scripts/install_udev_rules.sh`:
 

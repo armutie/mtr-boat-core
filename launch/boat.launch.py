@@ -91,6 +91,8 @@ def generate_launch_description() -> LaunchDescription:
                 name="radar_uart_node",
                 parameters=[params_file],
                 output="screen",
+                respawn=True,
+                respawn_delay=2.0,
                 condition=IfCondition(enable_radar),
             ),
             Node(
@@ -99,6 +101,8 @@ def generate_launch_description() -> LaunchDescription:
                 name="radar_nav_node",
                 parameters=[params_file],
                 output="screen",
+                respawn=True,
+                respawn_delay=2.0,
                 condition=IfCondition(enable_radar),
             ),
             Node(
@@ -107,6 +111,8 @@ def generate_launch_description() -> LaunchDescription:
                 name="autonomy_node",
                 parameters=[params_file],
                 output="screen",
+                respawn=True,
+                respawn_delay=2.0,
                 condition=IfCondition(enable_autonomy),
             ),
             ExecuteProcess(
@@ -123,6 +129,8 @@ def generate_launch_description() -> LaunchDescription:
                     dashboard_config,
                 ],
                 output="screen",
+                respawn=True,
+                respawn_delay=2.0,
                 condition=IfCondition(enable_dashboard),
             ),
         ]

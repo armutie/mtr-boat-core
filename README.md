@@ -48,71 +48,68 @@ Requirements:
 - ROS 2 Humble
 - `colcon`, `vcs`, and `cmake`
 
-Create the workspace and build the pinned sensor stack:
+Clone the self-contained workspace and build the pinned sensor stack:
 
 ```bash
 source /opt/ros/humble/setup.bash
 sudo apt update
 sudo apt install -y python3-colcon-common-extensions python3-vcstool cmake
 
-mkdir -p ~/mtr_ws/src
 git clone --branch ros2-foundation --single-branch \
   https://github.com/armutie/mtr-boat-core.git \
-  ~/mtr_ws/src/mtr-boat-core
+  ~/mtr-boat-core-foundation
 
-~/mtr_ws/src/mtr-boat-core/scripts/bootstrap_ros2_workspace.sh ~/mtr_ws
-source ~/mtr_ws/install/setup.bash
+cd ~/mtr-boat-core-foundation
+./scripts/bootstrap_ros2_workspace.sh
+source install/setup.bash
 ```
 
 Install the stable hardware names once:
 
 ```bash
-cd ~/mtr_ws/src/mtr-boat-core
+cd ~/mtr-boat-core-foundation
 sudo ./scripts/install_udev_rules.sh
 ```
 
 This automatically maps the tested hardware to `/dev/mtr_camera`,
 `/dev/mtr_esp32`, and `/dev/mtr_gnss`, regardless of USB connection order.
 The aliases return automatically after reconnecting a device or rebooting.
-
-Create the local sensor configuration:
-
-```bash
-cp ~/mtr_ws/src/mtr-boat-core/config/ros/boat.example.yaml \
-  ~/mtr_ws/src/mtr-boat-core/config/ros/boat.local.yaml
-nano ~/mtr_ws/src/mtr-boat-core/config/ros/boat.local.yaml
-```
+The checked-in configuration matches the tested boat and needs no per-machine
+port setup.
 
 Launch sensors, autonomy, control, and the dashboard:
 
 ```bash
-cd ~/mtr_ws
+cd ~/mtr-boat-core-foundation
 source install/setup.bash
-PARAMS="$PWD/src/mtr-boat-core/config/ros/boat.local.yaml"
-ros2 launch mtr_boat_core boat.launch.py params_file:="$PARAMS"
+ros2 launch mtr_boat_core boat.launch.py
 ```
 
 Open `http://<orange-pi-ip>:8080`. LiDAR, radar, thrusters, and unmeasured
 mounting transforms are disabled by default.
+
+Local configuration is optional. Create `config/ros/boat.local.yaml` or
+`config/boat.local.json` only when hardware placement, camera settings, LiDAR
+address, or controller tuning differs from the tested boat. The headless
+service uses those files automatically when they exist.
 
 ## Common launch modes
 
 ```bash
 # MPU-6050 instead of BNO055
 ros2 launch mtr_boat_core sensors.launch.py \
-  params_file:="$PARAMS" imu_driver:=mpu6050
+  imu_driver:=mpu6050
 
 # Enable the Seyond LiDAR
 ros2 launch mtr_boat_core boat.launch.py \
-  params_file:="$PARAMS" enable_lidar:=true
+  enable_lidar:=true
 
 # Sensor-only bring-up
-ros2 launch mtr_boat_core sensors.launch.py \
-  params_file:="$PARAMS"
+ros2 launch mtr_boat_core sensors.launch.py
 
 # Enable physical thrusters only after dry testing
 ros2 launch mtr_boat_core boat.launch.py \
-  params_file:="$PARAMS" enable_thruster:=true
+  enable_thruster:=true
 ```
 
 Camera viewer:
@@ -140,17 +137,18 @@ ssh uwmtr@10.42.0.1
 Install the boat runtime as a system service once:
 
 ```bash
-cd /home/uwmtr/mtr-boat-core-foundation
+cd ~/mtr-boat-core-foundation
 sudo ./scripts/install_systemd_service.sh
 sudo systemctl start mtr-boat
 ```
 
-The service starts automatically after future boots and restarts the launch
-process after a failure. It starts the ESP32 serial owner, but both the control
-supervisor and dashboard initialize in `off` mode and continuously command
-neutral `1500/1500`. Movement still requires explicitly selecting manual or
-auto control and supplying fresh commands. With the service installed, normal
-headless operation is simply:
+The service starts automatically after future boots. ROS launch respawns
+critical nodes after an individual process failure, and systemd restarts the
+whole launch process if it exits. The service starts the ESP32 serial owner,
+but both the control supervisor and dashboard initialize in `off` mode and
+continuously command neutral `1500/1500`. Movement still requires explicitly
+selecting manual or auto control and supplying fresh commands. With the service
+installed, normal headless operation is simply:
 
 1. Power the boat and wait 60–90 seconds.
 2. Connect the laptop to `MTR-Boat`.
@@ -167,34 +165,30 @@ journalctl -u mtr-boat -f
 After pulling software changes, rebuild and restart:
 
 ```bash
-cd /home/uwmtr/mtr-boat-core-foundation
+cd ~/mtr-boat-core-foundation
+git pull --ff-only
 source /opt/ros/humble/setup.bash
-colcon build --symlink-install
+./scripts/bootstrap_ros2_workspace.sh
 sudo systemctl restart mtr-boat
 ```
 
-### Manual fallback and thruster testing
-
-Stop the automatic service before starting another launch:
+### Service control and diagnostics
 
 ```bash
-sudo systemctl stop mtr-boat
+systemctl status mtr-boat
+journalctl -u mtr-boat -f
+sudo systemctl restart mtr-boat
 ```
 
-Start the runtime inside `tmux` so it survives an SSH or Wi-Fi interruption:
+Check the running ROS graph and hardware status over SSH:
 
 ```bash
-tmux new -s boat
-cd /home/uwmtr/mtr-boat-core-foundation
+cd ~/mtr-boat-core-foundation
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-ros2 launch mtr_boat_core boat.launch.py
-```
-
-Detach with `Ctrl+B`, then `D`. Reattach later with:
-
-```bash
-tmux attach -t boat
+ros2 node list
+ros2 topic echo /diagnostics --once
+ros2 topic echo /thrusters/status --once
 ```
 
 Open the dashboard and camera from the laptop:
@@ -205,12 +199,14 @@ http://10.42.0.1:8081
 ```
 
 The hotspot, SSH, and installed `mtr-boat` service start automatically after
-reboot. A manual `tmux` session does not. Never run a manual boat launch beside
-the service because both would try to own the same hardware.
+reboot. Never run a second boat launch beside the service because both would
+try to own the same hardware.
 
 The ESP32 bridge is available in the boot service, but control remains
-off/neutral until deliberately armed from the dashboard. Stop the service
-before using a separate manual ROS launch or a direct serial bench tool.
+off/neutral until deliberately armed from the dashboard. For an isolated
+foreground bench test, stop the service first, source `install/setup.bash`, and
+launch with `enable_thruster:=true`. Stop the service before using any direct
+serial bench tool.
 
 Before a water test, perform a complete headless cold-boot rehearsal using the
 actual boat battery and power converter. Remove the monitor, keyboard, and wall

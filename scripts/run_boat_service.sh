@@ -22,7 +22,17 @@ fi
 source "${ros_setup}"
 source "${workspace_setup}"
 
+launch_args=(enable_thruster:=true)
+local_params="${repo_root}/config/ros/boat.local.yaml"
+local_dashboard="${repo_root}/config/boat.local.json"
+if [[ -f "${local_params}" ]]; then
+  launch_args+=("params_file:=${local_params}")
+fi
+if [[ -f "${local_dashboard}" ]]; then
+  launch_args+=("dashboard_config:=${local_dashboard}")
+fi
+
 # Start the ESP32 serial owner so the dashboard is ready for operation. The
 # control supervisor and dashboard both initialize in off mode, which sends
 # neutral 1500/1500 until an operator explicitly selects manual or auto.
-exec ros2 launch mtr_boat_core boat.launch.py enable_thruster:=true
+exec ros2 launch mtr_boat_core boat.launch.py "${launch_args[@]}"

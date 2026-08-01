@@ -268,6 +268,34 @@ class Bno055Tests(unittest.TestCase):
         self.assertEqual(imu.recovery_attempts, 2)
         self.assertEqual(imu.recovery_count, 1)
 
+    def test_recovers_when_sensor_is_missing_during_startup(self) -> None:
+        now = 10.0
+        recovered_sample = object()
+        replacement = FakeImu([recovered_sample])
+
+        def clock() -> float:
+            return now
+
+        imu = RecoveringBno055(
+            None,
+            lambda: replacement,
+            initial_retry_delay_s=2.0,
+            clock=clock,
+            initial_error="device not ready",
+        )
+
+        self.assertTrue(imu.recovering)
+        self.assertEqual(imu.last_error, "device not ready")
+        self.assertAlmostEqual(imu.retry_in_s, 2.0)
+        with self.assertRaises(Bno055RecoveryPending):
+            imu.read_sample()
+
+        now = 12.0
+        self.assertIs(imu.read_sample(), recovered_sample)
+        self.assertFalse(imu.recovering)
+        self.assertEqual(imu.recovery_attempts, 1)
+        self.assertEqual(imu.recovery_count, 1)
+
     def test_recovery_configuration_is_validated(self) -> None:
         imu = FakeImu([])
 

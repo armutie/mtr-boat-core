@@ -117,12 +117,22 @@ class Bno055Node(Node):
             10,
         )
 
-        initial_imu = Bno055(
-            bus=bus,
-            address=address,
-            placement=placement,
-            reset_on_start=reset_on_start,
-        )
+        try:
+            initial_imu = Bno055(
+                bus=bus,
+                address=address,
+                placement=placement,
+                reset_on_start=reset_on_start,
+            )
+            initial_error = ""
+        except Exception as exc:
+            initial_imu = None
+            initial_error = str(exc)
+            self.get_logger().warning(
+                "BNO055 unavailable during startup; "
+                "automatic initialization will continue in the background: "
+                f"{exc}"
+            )
         self.imu = RecoveringBno055(
             initial_imu,
             lambda: Bno055(
@@ -152,6 +162,7 @@ class Bno055Node(Node):
                 ),
                 0.1,
             ),
+            initial_error=initial_error,
         )
         self._last_recovery_count = 0
         self._last_error_log_s = 0.0

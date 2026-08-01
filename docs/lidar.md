@@ -5,13 +5,12 @@ Seyond D1-R as `/lidar/points`.
 
 ## Build
 
-`dependencies.repos` pins the Seyond SDK and KISS-ICP inputs. From a clone at
-`<workspace>/src/mtr-boat-core`, run:
+`dependencies.repos` pins the Seyond SDK and KISS-ICP inputs. From the
+repository root, run:
 
 ```bash
-MTR_WS=/absolute/path/to/workspace
-"$MTR_WS/src/mtr-boat-core/scripts/bootstrap_ros2_workspace.sh" "$MTR_WS"
-source "$MTR_WS/install/setup.bash"
+./scripts/bootstrap_ros2_workspace.sh
+source install/setup.bash
 ```
 
 The script imports and builds the pinned dependencies, the boat package, and

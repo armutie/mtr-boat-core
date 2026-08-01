@@ -136,6 +136,8 @@ def generate_launch_description() -> LaunchDescription:
                 name="gnss_node",
                 output="screen",
                 parameters=[params_file],
+                respawn=True,
+                respawn_delay=2.0,
                 condition=IfCondition(enable_gnss),
             ),
             Node(
@@ -144,6 +146,8 @@ def generate_launch_description() -> LaunchDescription:
                 name="imu_node",
                 output="screen",
                 parameters=[params_file, {"frame_id": imu_frame_id}],
+                respawn=True,
+                respawn_delay=2.0,
                 condition=imu_driver_enabled("mpu6050"),
             ),
             Node(
@@ -161,6 +165,8 @@ def generate_launch_description() -> LaunchDescription:
                         ),
                     },
                 ],
+                respawn=True,
+                respawn_delay=2.0,
                 condition=imu_driver_enabled("bno055"),
             ),
             Node(
@@ -194,6 +200,8 @@ def generate_launch_description() -> LaunchDescription:
                 output="screen",
                 parameters=[params_file],
                 additional_env={"PYTHONNOUSERSITE": "1"},
+                respawn=True,
+                respawn_delay=2.0,
                 condition=IfCondition(enable_camera),
             ),
             Node(
@@ -203,6 +211,8 @@ def generate_launch_description() -> LaunchDescription:
                 output="screen",
                 parameters=[params_file],
                 remappings=[("points", "/lidar/points")],
+                respawn=True,
+                respawn_delay=2.0,
                 condition=IfCondition(enable_lidar),
             ),
             Node(

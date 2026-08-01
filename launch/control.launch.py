@@ -35,6 +35,8 @@ def generate_launch_description() -> LaunchDescription:
                 name="control_supervisor_node",
                 parameters=[params_file],
                 output="screen",
+                respawn=True,
+                respawn_delay=2.0,
             ),
             Node(
                 package="mtr_boat_core",
@@ -42,6 +44,8 @@ def generate_launch_description() -> LaunchDescription:
                 name="thruster_node",
                 parameters=[params_file],
                 output="screen",
+                respawn=True,
+                respawn_delay=2.0,
                 condition=IfCondition(enable_thruster),
             ),
         ]

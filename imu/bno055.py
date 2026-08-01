@@ -98,13 +98,14 @@ class RecoveringBno055:
 
     def __init__(
         self,
-        imu: Bno055Device,
+        imu: Bno055Device | None,
         factory: Callable[[], Bno055Device],
         *,
         failure_threshold: int = 5,
         initial_retry_delay_s: float = 1.0,
         max_retry_delay_s: float = 30.0,
         clock: Callable[[], float] = time.monotonic,
+        initial_error: str = "",
     ) -> None:
         if failure_threshold < 1:
             raise ValueError("failure_threshold must be at least 1")
@@ -122,13 +123,17 @@ class RecoveringBno055:
         self._max_retry_delay_s = max_retry_delay_s
         self._retry_delay_s = initial_retry_delay_s
         self._clock = clock
-        self._next_retry_s = 0.0
+        self._next_retry_s = (
+            clock() + initial_retry_delay_s
+            if imu is None
+            else 0.0
+        )
         self._closed = False
 
         self.consecutive_failures = 0
         self.recovery_attempts = 0
         self.recovery_count = 0
-        self.last_error = ""
+        self.last_error = initial_error
 
     @property
     def failure_threshold(self) -> int:
