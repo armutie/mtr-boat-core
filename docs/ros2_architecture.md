@@ -17,6 +17,32 @@ LiDAR driver -----> /lidar/points      sensor_msgs/PointCloud2
 GNSS and IMU are implemented in `boat_ros`. The camera and LiDAR entries define
 the interfaces that their existing drivers should meet when added.
 
+The Seyond D1-R integration uses the `seyond_pointcloud_node` executable from
+the `seyond_mapping` package. Its public contract is:
+
+```text
+topic:       /lidar/points
+type:        sensor_msgs/msg/PointCloud2
+frame:       lidar_link
+QoS:         sensor-data (best effort, volatile)
+fields:      x, y, z, intensity, time
+coordinates: REP-103 X=forward, Y=left, Z=up
+timestamp:   Orange Pi acquisition time
+```
+
+The SDK's native X=up, Y=right, Z=forward coordinates are converted inside the
+driver. Per-point `time` remains relative within a frame for scan deskewing.
+Until the D1-R is synchronized to the boat clock, the PointCloud2 header uses
+the Orange Pi acquisition time so it can be combined with IMU, GNSS, radar,
+and camera messages.
+
+LiDAR startup is disabled by default and enabled with `enable_lidar:=true`.
+The fixed `base_link -> lidar_link` transform is controlled separately by
+`publish_lidar_tf`, which is also false by default. Measure the LiDAR origin
+relative to the boat reference point before enabling the transform, then set
+`lidar_x`, `lidar_y`, `lidar_z`, `lidar_roll`, `lidar_pitch`, and `lidar_yaw`
+at launch. Distances are metres and angles are radians.
+
 ## Design rules
 
 - Prefer standard ROS messages over JSON or project-specific messages.
