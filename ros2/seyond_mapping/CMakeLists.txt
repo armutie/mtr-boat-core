@@ -37,6 +37,7 @@ foreach(SDK_LIB innolidarsdkclient innolidarsdkcommon innolidarutils)
 endforeach()
 
 add_executable(seyond_pointcloud_node src/seyond_pointcloud_node.cpp)
+target_include_directories(seyond_pointcloud_node PRIVATE include)
 target_include_directories(seyond_pointcloud_node SYSTEM PRIVATE
   "${SDK_ROOT}"
   "${SDK_ROOT}/src")
@@ -59,5 +60,11 @@ install(
   DESTINATION share/${PROJECT_NAME}
   PATTERN "__pycache__" EXCLUDE
   PATTERN "*.pyc" EXCLUDE)
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_point_fields test/test_point_fields.cpp)
+  target_include_directories(test_point_fields PRIVATE include)
+endif()
 
 ament_package()

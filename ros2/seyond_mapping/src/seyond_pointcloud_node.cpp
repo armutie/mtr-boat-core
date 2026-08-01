@@ -13,6 +13,8 @@
 #include "sensor_msgs/msg/point_field.hpp"
 #include "sensor_msgs/point_cloud2_iterator.hpp"
 
+#include "seyond_mapping/point_fields.hpp"
+
 #include "src/sdk_common/inno_lidar_api.h"
 #include "src/sdk_common/inno_lidar_other_api.h"
 #include "src/sdk_common/inno_lidar_packet_utils.h"
@@ -155,7 +157,9 @@ class SeyondPointCloudNode final : public rclcpp::Node {
         second_return = p.is_2nd_return;
       } else {
         const auto &p = reinterpret_cast<const InnoEnXyzPoint *>(packet.payload)[i];
-        x = p.z; y = -p.y; z = p.x; intensity = p.reflectance;
+        x = p.z; y = -p.y; z = p.x;
+        intensity = seyond_mapping::select_enhanced_intensity(
+            packet.use_reflectance, p.reflectance, p.intensity);
         time = p.ts_10us * kTenUsToSeconds;
         second_return = p.is_2nd_return;
       }
