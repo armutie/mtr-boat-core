@@ -493,7 +493,13 @@ class CameraNode(Node):
     ) -> tuple[int, bytes] | None:
         with self._condition:
             self._condition.wait_for(
-                lambda: self._sequence != after_sequence or self.stopping,
+                lambda: (
+                    (
+                        self._sequence != after_sequence
+                        and self._jpeg is not None
+                    )
+                    or self.stopping
+                ),
                 timeout=timeout,
             )
             if self._sequence == after_sequence or self._jpeg is None:

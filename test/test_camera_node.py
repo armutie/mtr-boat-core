@@ -85,6 +85,41 @@ class CameraNodeTests(unittest.TestCase):
         self.assertEqual(state._measured_fps, 0.0)
         self.assertEqual(state._last_frame_monotonic, 0.0)
 
+    def test_wait_for_jpeg_blocks_until_fresh_frame_after_disconnect(
+        self,
+    ) -> None:
+        state = SimpleNamespace(
+            _condition=threading.Condition(),
+            _sequence=4,
+            _jpeg=None,
+            stopping=False,
+        )
+        result = []
+        done = threading.Event()
+
+        def wait_for_frame() -> None:
+            result.append(
+                CameraNode.wait_for_jpeg(state, -1, timeout=1.0)
+            )
+            done.set()
+
+        thread = threading.Thread(target=wait_for_frame)
+        thread.start()
+        try:
+            self.assertFalse(done.wait(0.05))
+            with state._condition:
+                state._sequence = 5
+                state._jpeg = b"fresh jpeg"
+                state._condition.notify_all()
+
+            self.assertTrue(done.wait(0.5))
+            self.assertEqual(result, [(5, b"fresh jpeg")])
+        finally:
+            state.stopping = True
+            with state._condition:
+                state._condition.notify_all()
+            thread.join(timeout=0.5)
+
 
 if __name__ == "__main__":
     unittest.main()
