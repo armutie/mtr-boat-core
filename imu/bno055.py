@@ -82,7 +82,7 @@ class Bno055ReadError(Bno055Error):
 
 
 class Bno055:
-    """BNO055 I2C driver configured for ROS-compatible SI/ENU output."""
+    """Read BNO055 I2C data in SI units using the Bosch Android format."""
 
     CHIP_ID = 0xA0
 
@@ -104,8 +104,10 @@ class Bno055:
     MODE_NDOF = 0x0C
     POWER_NORMAL = 0x00
 
-    # m/s^2, rad/s, degrees, Celsius, Android/ENU fusion convention.
-    UNIT_SELECTION_ROS = 0x82
+    # m/s^2, rad/s, degrees, Celsius, Bosch Android orientation convention.
+    # The Android orientation bit does not by itself guarantee a REP-103 ENU
+    # quaternion for an arbitrary physical mounting.
+    UNIT_SELECTION_SI_ANDROID = 0x82
 
     PLACEMENTS = {
         "P0": (0x21, 0x04),
@@ -176,7 +178,7 @@ class Bno055:
         self._write(self.REG_POWER_MODE, self.POWER_NORMAL)
         self._write(self.REG_PAGE_ID, 0x00)
         self._write(self.REG_SYSTEM_TRIGGER, 0x00)
-        self._write(self.REG_UNIT_SELECTION, self.UNIT_SELECTION_ROS)
+        self._write(self.REG_UNIT_SELECTION, self.UNIT_SELECTION_SI_ANDROID)
 
         axis_map_config, axis_map_sign = self.PLACEMENTS[placement]
         self._write(self.REG_AXIS_MAP_CONFIG, axis_map_config)

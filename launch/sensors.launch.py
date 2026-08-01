@@ -19,6 +19,7 @@ def generate_launch_description() -> LaunchDescription:
     enable_gnss = LaunchConfiguration("enable_gnss")
     enable_imu = LaunchConfiguration("enable_imu")
     imu_driver = LaunchConfiguration("imu_driver")
+    publish_imu_tf = LaunchConfiguration("publish_imu_tf")
     base_frame_id = LaunchConfiguration("base_frame_id")
     imu_frame_id = LaunchConfiguration("imu_frame_id")
     imu_x = LaunchConfiguration("imu_x")
@@ -40,6 +41,34 @@ def generate_launch_description() -> LaunchDescription:
                 ]
             )
         )
+    enable_camera = LaunchConfiguration("enable_camera")
+    publish_camera_tf = LaunchConfiguration("publish_camera_tf")
+    camera_x = LaunchConfiguration("camera_x")
+    camera_y = LaunchConfiguration("camera_y")
+    camera_z = LaunchConfiguration("camera_z")
+    camera_roll = LaunchConfiguration("camera_roll")
+    camera_pitch = LaunchConfiguration("camera_pitch")
+    camera_yaw = LaunchConfiguration("camera_yaw")
+    enable_lidar = LaunchConfiguration("enable_lidar")
+    publish_lidar_tf = LaunchConfiguration("publish_lidar_tf")
+    lidar_x = LaunchConfiguration("lidar_x")
+    lidar_y = LaunchConfiguration("lidar_y")
+    lidar_z = LaunchConfiguration("lidar_z")
+    lidar_roll = LaunchConfiguration("lidar_roll")
+    lidar_pitch = LaunchConfiguration("lidar_pitch")
+    lidar_yaw = LaunchConfiguration("lidar_yaw")
+
+    imu_transform_enabled = IfCondition(
+        PythonExpression(
+            [
+                "'",
+                enable_imu,
+                "'.lower() == 'true' and '",
+                publish_imu_tf,
+                "'.lower() == 'true'",
+            ]
+        )
+    )
 
     return LaunchDescription(
         [
@@ -52,8 +81,13 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("enable_imu", default_value="true"),
             DeclareLaunchArgument(
                 "imu_driver",
-                default_value="bno055",
+                default_value="mpu6050",
                 description="IMU implementation: bno055 or mpu6050",
+            ),
+            DeclareLaunchArgument(
+                "publish_imu_tf",
+                default_value="false",
+                description="Publish the measured base_link to imu_link transform",
             ),
             DeclareLaunchArgument("base_frame_id", default_value="base_link"),
             DeclareLaunchArgument("imu_frame_id", default_value="imu_link"),
@@ -63,6 +97,30 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("imu_roll", default_value="0.0"),
             DeclareLaunchArgument("imu_pitch", default_value="0.0"),
             DeclareLaunchArgument("imu_yaw", default_value="0.0"),
+            DeclareLaunchArgument("enable_camera", default_value="true"),
+            DeclareLaunchArgument(
+                "publish_camera_tf",
+                default_value="false",
+                description="Publish the measured base_link to camera_link transform",
+            ),
+            DeclareLaunchArgument("camera_x", default_value="0.0"),
+            DeclareLaunchArgument("camera_y", default_value="0.0"),
+            DeclareLaunchArgument("camera_z", default_value="0.0"),
+            DeclareLaunchArgument("camera_roll", default_value="0.0"),
+            DeclareLaunchArgument("camera_pitch", default_value="0.0"),
+            DeclareLaunchArgument("camera_yaw", default_value="0.0"),
+            DeclareLaunchArgument("enable_lidar", default_value="false"),
+            DeclareLaunchArgument(
+                "publish_lidar_tf",
+                default_value="false",
+                description="Publish the measured base_link to lidar_link transform",
+            ),
+            DeclareLaunchArgument("lidar_x", default_value="0.0"),
+            DeclareLaunchArgument("lidar_y", default_value="0.0"),
+            DeclareLaunchArgument("lidar_z", default_value="0.0"),
+            DeclareLaunchArgument("lidar_roll", default_value="0.0"),
+            DeclareLaunchArgument("lidar_pitch", default_value="0.0"),
+            DeclareLaunchArgument("lidar_yaw", default_value="0.0"),
             Node(
                 package="mtr_boat_core",
                 executable="gnss_node",
@@ -109,7 +167,100 @@ def generate_launch_description() -> LaunchDescription:
                     "--child-frame-id",
                     imu_frame_id,
                 ],
-                condition=IfCondition(enable_imu),
+                condition=imu_transform_enabled,
+            ),
+            Node(
+                package="mtr_boat_core",
+                executable="camera_node",
+                name="camera_node",
+                output="screen",
+                parameters=[params_file],
+                additional_env={"PYTHONNOUSERSITE": "1"},
+                condition=IfCondition(enable_camera),
+            ),
+            Node(
+                package="seyond_mapping",
+                executable="seyond_pointcloud_node",
+                name="seyond_pointcloud_node",
+                output="screen",
+                parameters=[params_file],
+                remappings=[("points", "/lidar/points")],
+                condition=IfCondition(enable_lidar),
+            ),
+            Node(
+                package="tf2_ros",
+                executable="static_transform_publisher",
+                name="camera_mount_transform",
+                output="screen",
+                arguments=[
+                    "--x",
+                    camera_x,
+                    "--y",
+                    camera_y,
+                    "--z",
+                    camera_z,
+                    "--roll",
+                    camera_roll,
+                    "--pitch",
+                    camera_pitch,
+                    "--yaw",
+                    camera_yaw,
+                    "--frame-id",
+                    "base_link",
+                    "--child-frame-id",
+                    "camera_link",
+                ],
+                condition=IfCondition(publish_camera_tf),
+            ),
+            Node(
+                package="tf2_ros",
+                executable="static_transform_publisher",
+                name="camera_optical_transform",
+                output="screen",
+                arguments=[
+                    "--x",
+                    "0.0",
+                    "--y",
+                    "0.0",
+                    "--z",
+                    "0.0",
+                    "--roll",
+                    "-1.5707963267948966",
+                    "--pitch",
+                    "0.0",
+                    "--yaw",
+                    "-1.5707963267948966",
+                    "--frame-id",
+                    "camera_link",
+                    "--child-frame-id",
+                    "camera_optical_frame",
+                ],
+                condition=IfCondition(enable_camera),
+            ),
+            Node(
+                package="tf2_ros",
+                executable="static_transform_publisher",
+                name="lidar_static_transform",
+                output="screen",
+                arguments=[
+                    "--x",
+                    lidar_x,
+                    "--y",
+                    lidar_y,
+                    "--z",
+                    lidar_z,
+                    "--roll",
+                    lidar_roll,
+                    "--pitch",
+                    lidar_pitch,
+                    "--yaw",
+                    lidar_yaw,
+                    "--frame-id",
+                    "base_link",
+                    "--child-frame-id",
+                    "lidar_link",
+                ],
+                condition=IfCondition(publish_lidar_tf),
             ),
         ]
     )

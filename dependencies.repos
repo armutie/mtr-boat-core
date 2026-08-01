@@ -1,0 +1,9 @@
+repositories:
+  inno-lidar-sdk:
+    type: git
+    url: https://github.com/Seyond-Inc/inno-lidar-sdk.git
+    version: 73a24e98c283391b890cfd106e5cc13e9c9d7f5b
+  kiss-icp:
+    type: git
+    url: https://github.com/PRBonn/kiss-icp.git
+    version: 85488b7b6a6e1566cff0f8af4b83a9ea77dca7a0

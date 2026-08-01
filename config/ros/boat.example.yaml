@@ -26,10 +26,14 @@ bno055_node:
     # Reset makes startup deterministic but clears volatile calibration.
     reset_on_start: true
     frame_id: imu_link
+    # Keep the Bosch device quaternion off the standard fused topic until its
+    # mounting and world-frame convention are verified on the installed boat.
+    publish_fused_orientation: false
     data_topic: imu/data
     raw_topic: imu/data_raw
     magnetic_field_topic: imu/mag
     temperature_topic: imu/temperature
+    linear_acceleration_topic: imu/linear_acceleration
     gravity_topic: imu/gravity
     diagnostics_topic: /diagnostics
     publish_rate_hz: 50.0
@@ -40,3 +44,28 @@ bno055_node:
     angular_velocity_variance: [0.0, 0.0, 0.0]
     linear_acceleration_variance: [0.0, 0.0, 0.0]
     magnetic_field_variance: [0.0, 0.0, 0.0]
+
+camera_node:
+  ros__parameters:
+    device: /dev/mtr_camera
+    width: 1280
+    height: 720
+    fps: 30.0
+    frame_id: camera_optical_frame
+    topic: /camera/image_raw
+    publish_ros: true
+    enable_web: true
+    web_bind: 0.0.0.0
+    web_port: 8081
+    web_rotation_deg: 0
+    reconnect_delay_s: 2.0
+
+seyond_pointcloud_node:
+  ros__parameters:
+    lidar_ip: "172.168.1.10"
+    lidar_port: 8010
+    udp_port: 8010
+    frame_id: "lidar_link"
+    min_range: 0.15
+    max_range: 50.0
+    publish_second_return: true

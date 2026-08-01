@@ -29,7 +29,7 @@ def covariance_diagonal(values: list[float]) -> list[float]:
 
 
 class Bno055Node(Node):
-    """Publish BNO055 fused orientation and all nine sensor axes."""
+    """Publish BNO055 raw axes and optional device-fused orientation."""
 
     def __init__(self) -> None:
         super().__init__("bno055_node")
@@ -39,10 +39,15 @@ class Bno055Node(Node):
         self.declare_parameter("placement", "P1")
         self.declare_parameter("reset_on_start", True)
         self.declare_parameter("frame_id", "imu_link")
+        self.declare_parameter("publish_fused_orientation", False)
         self.declare_parameter("data_topic", "imu/data")
         self.declare_parameter("raw_topic", "imu/data_raw")
         self.declare_parameter("magnetic_field_topic", "imu/mag")
         self.declare_parameter("temperature_topic", "imu/temperature")
+        self.declare_parameter(
+            "linear_acceleration_topic",
+            "imu/linear_acceleration",
+        )
         self.declare_parameter("gravity_topic", "imu/gravity")
         self.declare_parameter("diagnostics_topic", "/diagnostics")
         self.declare_parameter("publish_rate_hz", 50.0)
@@ -57,6 +62,9 @@ class Bno055Node(Node):
         placement = str(self.get_parameter("placement").value)
         reset_on_start = bool(self.get_parameter("reset_on_start").value)
         self.frame_id = str(self.get_parameter("frame_id").value)
+        self.publish_fused_orientation = bool(
+            self.get_parameter("publish_fused_orientation").value
+        )
         self.hardware_id = f"i2c-{bus}:0x{address:02x}"
 
         self.orientation_covariance = self._covariance("orientation_variance")
@@ -88,6 +96,11 @@ class Bno055Node(Node):
         self.temperature_publisher = self.create_publisher(
             Temperature,
             str(self.get_parameter("temperature_topic").value),
+            qos_profile_sensor_data,
+        )
+        self.linear_acceleration_publisher = self.create_publisher(
+            Vector3Stamped,
+            str(self.get_parameter("linear_acceleration_topic").value),
             qos_profile_sensor_data,
         )
         self.gravity_publisher = self.create_publisher(
@@ -128,7 +141,9 @@ class Bno055Node(Node):
 
         self.get_logger().info(
             f"Reading BNO055 on {self.hardware_id} in NDOF mode; "
-            f"publishing {self.get_parameter('data_topic').value}"
+            f"raw IMU topic {self.get_parameter('raw_topic').value}; "
+            f"device-fused orientation publishing is "
+            f"{'enabled' if self.publish_fused_orientation else 'disabled'}"
         )
 
     def _covariance(self, parameter_name: str) -> list[float]:
@@ -160,23 +175,26 @@ class Bno055Node(Node):
         )
         self.raw_publisher.publish(raw)
 
-        fused = Imu()
-        fused.header.stamp = stamp
-        fused.header.frame_id = self.frame_id
-        fused.orientation.w = sample.orientation_w
-        fused.orientation.x = sample.orientation_x
-        fused.orientation.y = sample.orientation_y
-        fused.orientation.z = sample.orientation_z
-        fused.orientation_covariance = self.orientation_covariance
-        fused.angular_velocity = raw.angular_velocity
-        fused.angular_velocity_covariance = self.angular_velocity_covariance
-        fused.linear_acceleration.x = sample.linear_acceleration_x_mps2
-        fused.linear_acceleration.y = sample.linear_acceleration_y_mps2
-        fused.linear_acceleration.z = sample.linear_acceleration_z_mps2
-        fused.linear_acceleration_covariance = (
-            self.linear_acceleration_covariance
-        )
-        self.data_publisher.publish(fused)
+        if self.publish_fused_orientation:
+            fused = Imu()
+            fused.header.stamp = stamp
+            fused.header.frame_id = self.frame_id
+            fused.orientation.w = sample.orientation_w
+            fused.orientation.x = sample.orientation_x
+            fused.orientation.y = sample.orientation_y
+            fused.orientation.z = sample.orientation_z
+            fused.orientation_covariance = self.orientation_covariance
+            fused.angular_velocity = raw.angular_velocity
+            fused.angular_velocity_covariance = (
+                self.angular_velocity_covariance
+            )
+            # REP-145 requires specific force, including gravity at rest, on
+            # both imu/data and imu/data_raw.
+            fused.linear_acceleration = raw.linear_acceleration
+            fused.linear_acceleration_covariance = (
+                self.linear_acceleration_covariance
+            )
+            self.data_publisher.publish(fused)
 
         magnetic = MagneticField()
         magnetic.header.stamp = stamp
@@ -193,6 +211,14 @@ class Bno055Node(Node):
         temperature.temperature = sample.temperature_c
         temperature.variance = 0.0
         self.temperature_publisher.publish(temperature)
+
+        linear_acceleration = Vector3Stamped()
+        linear_acceleration.header.stamp = stamp
+        linear_acceleration.header.frame_id = self.frame_id
+        linear_acceleration.vector.x = sample.linear_acceleration_x_mps2
+        linear_acceleration.vector.y = sample.linear_acceleration_y_mps2
+        linear_acceleration.vector.z = sample.linear_acceleration_z_mps2
+        self.linear_acceleration_publisher.publish(linear_acceleration)
 
         gravity = Vector3Stamped()
         gravity.header.stamp = stamp
@@ -244,6 +270,10 @@ class Bno055Node(Node):
                 ),
                 KeyValue(key="system_status", value=str(status.system_status)),
                 KeyValue(key="system_error", value=str(status.system_error)),
+                KeyValue(
+                    key="fused_orientation_published",
+                    value=str(self.publish_fused_orientation).lower(),
+                ),
             ]
 
         message.status = [diagnostic]

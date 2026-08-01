@@ -1,0 +1,46 @@
+seyond_pointcloud_node:
+  ros__parameters:
+    lidar_ip: "172.168.1.10"
+    lidar_port: 8010
+    udp_port: 8010
+    frame_id: "lidar_link"
+    min_range: 0.15
+    max_range: 50.0
+    publish_second_return: true
+
+kiss_icp_node:
+  ros__parameters:
+    base_frame: ""
+    lidar_odom_frame: "odom_lidar"
+    publish_odom_tf: true
+    invert_odom_tf: false
+    publish_debug_clouds: true
+    use_sim_time: false
+    data:
+      deskew: true
+      min_range: 0.15
+      max_range: 50.0
+    mapping:
+      voxel_size: 0.25
+      max_points_per_voxel: 20
+    adaptive_threshold:
+      initial_threshold: 2.0
+      min_motion_th: 0.1
+    registration:
+      max_num_iterations: 500
+      convergence_criterion: 0.0001
+      max_num_threads: 0
+
+map_accumulator_node:
+  ros__parameters:
+    voxel_size: 0.08
+    max_voxels: 3000000
+    publish_period: 2.0
+    output_prefix: "maps/handheld_map"
+
+live_web_viewer_node:
+  ros__parameters:
+    bind_address: "0.0.0.0"
+    port: 8080
+    max_points: 80000
+    input_native_coordinates: false

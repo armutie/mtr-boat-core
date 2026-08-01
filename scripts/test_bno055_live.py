@@ -23,7 +23,7 @@ def quaternion_to_rpy(
     y: float,
     z: float,
 ) -> tuple[float, float, float]:
-    """Return ROS-style roll, pitch, yaw in degrees from a unit quaternion."""
+    """Return roll, pitch, yaw in degrees from a unit quaternion."""
 
     sin_roll = 2.0 * (w * x + y * z)
     cos_roll = 1.0 - 2.0 * (x * x + y * y)
@@ -47,7 +47,6 @@ def print_sample(elapsed_s: float, imu: Bno055, rate_hz: float) -> None:
         sample.orientation_y,
         sample.orientation_z,
     )
-    magnetic_heading = (90.0 - yaw) % 360.0
     heading_ready = status.fully_calibrated
     calibration = (
         f"sys={status.system_calibration}/3 "
@@ -69,13 +68,8 @@ def print_sample(elapsed_s: float, imu: Bno055, rate_hz: float) -> None:
         f"{sample.orientation_y:+.4f} {sample.orientation_z:+.4f}]"
     )
     print(
-        "  RPY deg (ROS ENU, frame-dependent) = "
+        "  RPY deg (BNO055 Android format, mounting-dependent) = "
         f"roll {roll:+7.2f}  pitch {pitch:+7.2f}  yaw {yaw:+7.2f}"
-    )
-    print(
-        "  compass heading approx = "
-        f"{magnetic_heading:7.2f} deg "
-        "(valid only after calibration and mounting setup)"
     )
     print(
         "  accel m/s² [incl. gravity] = "
@@ -148,7 +142,8 @@ def main() -> None:
         )
     print(
         "[BNO055] Ctrl-C exits. Rotate slowly and watch "
-        "quaternion/RPY/magnetic values change."
+        "quaternion/RPY/magnetic values change. Orientation is diagnostic "
+        "until its axes and heading are physically validated."
     )
 
     started = time.monotonic()

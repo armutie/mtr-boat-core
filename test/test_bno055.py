@@ -40,7 +40,7 @@ class FakeBus:
 
 
 class Bno055Tests(unittest.TestCase):
-    def test_configures_ndof_si_enu_and_requested_placement(self) -> None:
+    def test_configures_ndof_si_android_and_requested_placement(self) -> None:
         bus = FakeBus()
         sleeps: list[float] = []
 
@@ -61,7 +61,11 @@ class Bno055Tests(unittest.TestCase):
                 (0x29, Bno055.REG_POWER_MODE, Bno055.POWER_NORMAL),
                 (0x29, Bno055.REG_PAGE_ID, 0x00),
                 (0x29, Bno055.REG_SYSTEM_TRIGGER, 0x00),
-                (0x29, Bno055.REG_UNIT_SELECTION, Bno055.UNIT_SELECTION_ROS),
+                (
+                    0x29,
+                    Bno055.REG_UNIT_SELECTION,
+                    Bno055.UNIT_SELECTION_SI_ANDROID,
+                ),
                 (0x29, Bno055.REG_AXIS_MAP_CONFIG, 0x21),
                 (0x29, Bno055.REG_AXIS_MAP_SIGN, 0x02),
                 (0x29, Bno055.REG_OPERATION_MODE, Bno055.MODE_NDOF),
@@ -117,10 +121,13 @@ class Bno055Tests(unittest.TestCase):
 
         self.assertAlmostEqual(sample.acceleration_x_mps2, 9.81)
         self.assertAlmostEqual(sample.acceleration_y_mps2, -1.0)
+        self.assertAlmostEqual(sample.acceleration_z_mps2, 0.5)
         self.assertAlmostEqual(sample.angular_velocity_x_rad_s, 1.0)
         self.assertAlmostEqual(sample.angular_velocity_y_rad_s, -0.5)
         self.assertAlmostEqual(sample.magnetic_field_x_t, 1e-6)
         self.assertAlmostEqual(sample.magnetic_field_y_t, -2e-6)
+        self.assertAlmostEqual(sample.linear_acceleration_x_mps2, 0.25)
+        self.assertAlmostEqual(sample.linear_acceleration_y_mps2, -0.5)
         self.assertAlmostEqual(sample.linear_acceleration_z_mps2, 1.0)
         self.assertAlmostEqual(sample.gravity_z_mps2, 9.81)
         self.assertEqual(sample.temperature_c, -5.0)
