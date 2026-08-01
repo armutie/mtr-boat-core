@@ -7,15 +7,28 @@ create a real hardware, safety, or computation boundary.
 ## Initial sensor graph
 
 ```text
-GNSS driver ------> /gnss/fix          sensor_msgs/NavSatFix
-IMU driver -------> /imu/data_raw      sensor_msgs/Imu
-camera driver ----> /camera/image_raw  sensor_msgs/Image
-                 -> /camera/camera_info
-LiDAR driver -----> /lidar/points      sensor_msgs/PointCloud2
+GNSS driver --------> /gnss/fix          sensor_msgs/NavSatFix
+BNO055 driver ------> /imu/data          sensor_msgs/Imu
+                   -> /imu/data_raw      sensor_msgs/Imu
+                   -> /imu/mag           sensor_msgs/MagneticField
+                   -> /imu/temperature   sensor_msgs/Temperature
+                   -> /imu/gravity       geometry_msgs/Vector3Stamped
+                   -> /diagnostics       diagnostic_msgs/DiagnosticArray
+camera driver ------> /camera/image_raw  sensor_msgs/Image
+                   -> /camera/camera_info
+LiDAR driver -------> /lidar/points      sensor_msgs/PointCloud2
 ```
 
-GNSS and IMU are implemented in `boat_ros`. The camera and LiDAR entries define
-the interfaces that their existing drivers should meet when added.
+GNSS, MPU-6050, and BNO055 nodes are implemented in `boat_ros`. The BNO055 is
+the default IMU in `sensors.launch.py`; `imu_driver:=mpu6050` preserves the
+original 6-axis bench path.
+
+The BNO055 node owns I2C bus 2/address `0x29`, selects NDOF fusion, and configures
+Android/ENU orientation output. Its `imu_link` axes and the static
+`base_link -> imu_link` transform must match the physical installation before
+orientation is fused into navigation. Calibration status is part of the
+runtime health contract rather than being inferred from plausible-looking
+orientation values.
 
 ## Design rules
 
