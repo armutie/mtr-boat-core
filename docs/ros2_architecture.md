@@ -118,16 +118,16 @@ at launch. Distances are metres and angles are radians.
 ## Autonomy and control
 
 ```text
-GNSS + IMU + route -> autonomy_node -> cmd_vel/auto --\
-dashboard -------------------------> cmd_vel/operator  |-> control supervisor
-dashboard -------------------------> control/mode -----/        |
-                                                               v
-                                                        cmd_vel -> ESP32
+GNSS + IMU + route -> autonomy_node -> thrusters/auto --\
+dashboard -------------------------> cmd_vel/operator    |-> control supervisor
+dashboard -------------------------> control/mode -------/        |
+                                                                 v
+                                                    thrusters/command -> ESP32
 ```
 
 The dashboard is an operator interface, not the autonomy runtime. It publishes
 routes and operator intent. `autonomy_node` owns waypoint decisions and
-publishes `/cmd_vel/auto`. The supervisor selects manual or auto output and can
+publishes `/thrusters/auto`. The supervisor selects manual or auto output and can
 blend a fresh operator correction into auto mode.
 
 Only `thruster_node` may open the ESP32 serial port in normal operation. It is

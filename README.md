@@ -8,13 +8,24 @@ messages, while hardware access stays in one owning node per device.
 
 ## System
 
-```text
-sensors -> ROS 2 topics -> decisions -> control supervisor -> ESP32
-           implemented    implemented    implemented
+```mermaid
+flowchart LR
+    Sensors["GNSS / IMU / Camera / LiDAR"] --> Topics["ROS 2 sensor topics"]
+    Topics --> Dashboard["Dashboard"]
+    Topics --> Auto["Autonomy"]
+
+    Dashboard -- "manual throttle / steering" --> Supervisor["Control supervisor"]
+    Dashboard -- "mode / stop" --> Supervisor
+    Auto -- "exact left / right PWM" --> Supervisor
+
+    Supervisor -- "final PWM pair" --> Thruster["Thruster node"]
+    Thruster -- "USB serial" --> ESP32
+    ESP32 --> Motors["ESCs / Thrusters"]
 ```
 
-The full ROS runtime is ready for Orange Pi bench testing. Autonomy behavior
-will continue to evolve inside its ROS node.
+The supervisor is the only command arbiter: it selects manual or automatic
+control, rejects stale commands, and outputs neutral PWM when control is off.
+Only the thruster node opens the ESP32 serial port.
 
 ## Hardware status
 
@@ -26,7 +37,7 @@ will continue to evolve inside its ROS node.
 | Arducam UVC | `/camera/image_raw` and port 8081 viewer | Enabled by default |
 | Seyond D1-R | `/lidar/points` | Opt-in |
 | TI xWR18xx radar | `/radar/raw_points` | Separate ROS node |
-| ESP32 thrusters | `/cmd_vel` via ROS serial owner | Opt-in |
+| ESP32 thrusters | `/thrusters/command` via ROS serial owner | Opt-in |
 
 ## Quick start
 

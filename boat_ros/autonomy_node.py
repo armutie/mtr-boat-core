@@ -7,7 +7,7 @@ import math
 import threading
 import time
 
-from geometry_msgs.msg import Twist, TwistStamped
+from geometry_msgs.msg import TwistStamped
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import (
@@ -17,7 +17,7 @@ from rclpy.qos import (
     qos_profile_sensor_data,
 )
 from sensor_msgs.msg import Imu, NavSatFix
-from std_msgs.msg import String
+from std_msgs.msg import Int32MultiArray, String
 
 from boat_core.autonomy import AutoConfig, AutoController
 from radar_nav.waypoint import WaypointNavConfig
@@ -114,9 +114,7 @@ class AutonomyNode(Node):
         self.declare_parameter("mode_topic", "control/mode")
         self.declare_parameter("route_topic", "autonomy/route")
         self.declare_parameter("status_topic", "autonomy/status")
-        self.declare_parameter("command_topic", "cmd_vel/auto")
-        self.declare_parameter("max_linear_mps", 1.0)
-        self.declare_parameter("max_angular_rps", 1.0)
+        self.declare_parameter("command_topic", "thrusters/auto")
 
         defaults = AutoConfig()
         for item in fields(AutoConfig):
@@ -150,13 +148,6 @@ class AutonomyNode(Node):
             forward_min_us=self.config.level1_us,
             forward_max_us=self.config.level3_us,
         )
-        self.max_linear_mps = float(
-            self.get_parameter("max_linear_mps").value
-        )
-        self.max_angular_rps = float(
-            self.get_parameter("max_angular_rps").value
-        )
-
         self.gnss_reader = SnapshotReader(
             {
                 "lat": None,
@@ -188,7 +179,7 @@ class AutonomyNode(Node):
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
         self.command_publisher = self.create_publisher(
-            Twist,
+            Int32MultiArray,
             str(self.get_parameter("command_topic").value),
             10,
         )
@@ -232,7 +223,7 @@ class AutonomyNode(Node):
             self.update_control,
         )
         self.get_logger().info(
-            "Autonomy consumes GNSS/IMU and publishes cmd_vel/auto"
+            "Autonomy consumes GNSS/IMU and publishes exact thruster PWM"
         )
 
     def on_fix(self, message: NavSatFix) -> None:
@@ -311,19 +302,21 @@ class AutonomyNode(Node):
     def update_control(self) -> None:
         self.controller.tick()
         mode, left_us, right_us, reason, status = self.control.output()
+        if mode != "auto":
+            left_us = self.config.neutral_us
+            right_us = self.config.neutral_us
+
+        command = Int32MultiArray()
+        command.data = [left_us, right_us]
+        self.command_publisher.publish(command)
+
+        # Normalized values are display-only. The actuator path keeps the
+        # controller's original PWM pair intact.
         throttle, steering = pair_to_manual(
             left_us,
             right_us,
             self.mapping,
         )
-        if mode != "auto":
-            throttle = 0.0
-            steering = 0.0
-
-        command = Twist()
-        command.linear.x = throttle * self.max_linear_mps
-        command.angular.z = steering * self.max_angular_rps
-        self.command_publisher.publish(command)
 
         status["reason"] = status.get("reason", reason)
         status["output"] = {

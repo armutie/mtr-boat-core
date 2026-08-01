@@ -77,14 +77,20 @@ seyond_pointcloud_node:
 control_supervisor_node:
   ros__parameters:
     operator_topic: cmd_vel/operator
-    auto_topic: cmd_vel/auto
-    output_topic: cmd_vel
+    auto_topic: thrusters/auto
+    output_topic: thrusters/command
     mode_request_topic: control/mode_request
     mode_topic: control/mode
     publish_rate_hz: 20.0
     command_timeout_s: 0.5
     max_linear_mps: 1.0
     max_angular_rps: 1.0
+    throttle_slew_per_s: 0.5
+    neutral_us: 1500
+    forward_min_us: 1565
+    forward_max_us: 1650
+    hard_min_us: 1350
+    hard_max_us: 2000
 
 autonomy_node:
   ros__parameters:
@@ -94,9 +100,7 @@ autonomy_node:
     mode_topic: control/mode
     route_topic: autonomy/route
     status_topic: autonomy/status
-    command_topic: cmd_vel/auto
-    max_linear_mps: 1.0
-    max_angular_rps: 1.0
+    command_topic: thrusters/auto
     controller: smooth_pd_v1
     control_hz: 10.0
     min_speed_for_course_mps: 0.08
@@ -130,16 +134,10 @@ thruster_node:
   ros__parameters:
     port: /dev/ttyACM0
     baud: 115200
-    command_topic: cmd_vel
+    command_topic: thrusters/command
     send_rate_hz: 20.0
     command_timeout_s: 0.5
-    throttle_slew_per_s: 0.5
-    max_linear_mps: 1.0
-    max_angular_rps: 1.0
     neutral_us: 1500
-    forward_min_us: 1565
-    forward_max_us: 1650
     hard_min_us: 1350
     hard_max_us: 2000
-    steering_slowdown: 0.35
     require_dual_firmware: true

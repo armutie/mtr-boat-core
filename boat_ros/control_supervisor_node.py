@@ -5,9 +5,14 @@ import time
 from geometry_msgs.msg import Twist
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import String
+from std_msgs.msg import Int32MultiArray, String
 
-from boat_core.control import ControlSupervisor, VelocityCommand
+from boat_core.control import (
+    ControlSupervisor,
+    PwmCommand,
+    VelocityCommand,
+)
+from thruster_control import ThrusterMapping
 
 
 class ControlSupervisorNode(Node):
@@ -15,14 +20,20 @@ class ControlSupervisorNode(Node):
         super().__init__("control_supervisor_node")
 
         self.declare_parameter("operator_topic", "cmd_vel/operator")
-        self.declare_parameter("auto_topic", "cmd_vel/auto")
-        self.declare_parameter("output_topic", "cmd_vel")
+        self.declare_parameter("auto_topic", "thrusters/auto")
+        self.declare_parameter("output_topic", "thrusters/command")
         self.declare_parameter("mode_request_topic", "control/mode_request")
         self.declare_parameter("mode_topic", "control/mode")
         self.declare_parameter("publish_rate_hz", 20.0)
         self.declare_parameter("command_timeout_s", 0.5)
         self.declare_parameter("max_linear_mps", 1.0)
         self.declare_parameter("max_angular_rps", 1.0)
+        self.declare_parameter("throttle_slew_per_s", 4.0)
+        self.declare_parameter("neutral_us", 1500)
+        self.declare_parameter("forward_min_us", 1565)
+        self.declare_parameter("forward_max_us", 1650)
+        self.declare_parameter("hard_min_us", 1350)
+        self.declare_parameter("hard_max_us", 2000)
 
         self.control = ControlSupervisor(
             command_timeout_s=float(
@@ -34,10 +45,28 @@ class ControlSupervisorNode(Node):
             max_angular_rps=float(
                 self.get_parameter("max_angular_rps").value
             ),
+            throttle_slew_per_s=float(
+                self.get_parameter("throttle_slew_per_s").value
+            ),
+            mapping=ThrusterMapping(
+                neutral_us=int(self.get_parameter("neutral_us").value),
+                forward_min_us=int(
+                    self.get_parameter("forward_min_us").value
+                ),
+                forward_max_us=int(
+                    self.get_parameter("forward_max_us").value
+                ),
+                hard_min_us=int(
+                    self.get_parameter("hard_min_us").value
+                ),
+                hard_max_us=int(
+                    self.get_parameter("hard_max_us").value
+                ),
+            ),
         )
 
         self.output_publisher = self.create_publisher(
-            Twist,
+            Int32MultiArray,
             str(self.get_parameter("output_topic").value),
             10,
         )
@@ -53,7 +82,7 @@ class ControlSupervisorNode(Node):
             10,
         )
         self.create_subscription(
-            Twist,
+            Int32MultiArray,
             str(self.get_parameter("auto_topic").value),
             self.on_auto,
             10,
@@ -78,9 +107,14 @@ class ControlSupervisorNode(Node):
             time.monotonic(),
         )
 
-    def on_auto(self, message: Twist) -> None:
+    def on_auto(self, message: Int32MultiArray) -> None:
+        if len(message.data) < 2:
+            self.get_logger().warning(
+                "Ignored auto command without left/right PWM"
+            )
+            return
         self.control.update_auto(
-            VelocityCommand(message.linear.x, message.angular.z),
+            PwmCommand(int(message.data[0]), int(message.data[1])),
             time.monotonic(),
         )
 
@@ -98,9 +132,8 @@ class ControlSupervisorNode(Node):
 
     def publish_command(self) -> None:
         command = self.control.output(time.monotonic())
-        output = Twist()
-        output.linear.x = command.linear_x
-        output.angular.z = command.angular_z
+        output = Int32MultiArray()
+        output.data = [command.left_us, command.right_us]
         self.output_publisher.publish(output)
 
         mode = String()

@@ -5,12 +5,14 @@ owns automatic decisions:
 
 ```text
 dashboard -> cmd_vel/operator ----------------------\
-dashboard -> autonomy/route -> autonomy -> cmd_vel/auto -> supervisor -> ESP32
+dashboard -> autonomy/route -> autonomy -> thrusters/auto -> supervisor
+                                                        -> thrusters/command -> ESP32
 ```
 
-The supervisor supports `off`, `manual`, and `auto`. In auto mode, a fresh
-operator command is added as a temporary correction; this lets future steering
-and throttle controls correct autonomy without changing the architecture.
+The supervisor supports `off`, `manual`, and `auto`. Manual velocity intent is
+mapped to PWM once. Autonomy publishes the exact left/right PWM it calculates,
+so its commands are not converted to velocity and back. In auto mode, a fresh
+operator command can still be applied as a temporary correction.
 
 ## Start
 
@@ -24,7 +26,7 @@ ros2 launch mtr_boat_core boat.launch.py \
 The thruster node is off by default. Inspect the final command with:
 
 ```bash
-ros2 topic echo /cmd_vel
+ros2 topic echo /thrusters/command
 ```
 
 Only after checking the dual-thruster firmware, ESC neutral, and physical
