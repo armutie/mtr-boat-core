@@ -4,6 +4,10 @@ gnss_node:
     baud: 38400
     frame_id: gnss_link
     topic: gnss/fix
+    velocity_topic: gnss/velocity
+    velocity_frame_id: map
+    diagnostics_topic: /diagnostics
+    diagnostics_rate_hz: 1.0
     poll_hz: 20.0
     serial_timeout_s: 0.05
 
@@ -81,6 +85,46 @@ control_supervisor_node:
     command_timeout_s: 0.5
     max_linear_mps: 1.0
     max_angular_rps: 1.0
+
+autonomy_node:
+  ros__parameters:
+    fix_topic: gnss/fix
+    velocity_topic: gnss/velocity
+    imu_topic: imu/data
+    mode_topic: control/mode
+    route_topic: autonomy/route
+    status_topic: autonomy/status
+    command_topic: cmd_vel/auto
+    max_linear_mps: 1.0
+    max_angular_rps: 1.0
+    controller: smooth_pd_v1
+    control_hz: 10.0
+    min_speed_for_course_mps: 0.08
+    gnss_reanchor_speed_mps: 0.3
+    gnss_heading_blend: 0.08
+    gnss_stale_s: 3.0
+    route_match_tolerance_m: 1.0
+    imu_stale_s: 2.0
+    heading_deadband_deg: 8.0
+    yaw_rate_deadband_dps: 2.0
+    yaw_lookahead_s: 2.0
+    pulse_turn_enter_deg: 18.0
+    pulse_turn_exit_deg: 6.0
+    pulse_reverse_deg: 38.0
+    pulse_duration_s: 0.25
+    pulse_observe_s: 0.35
+    smooth_kp: 0.025
+    smooth_kd: 0.035
+    smooth_turn_deadband: 0.08
+    smooth_pwm_slew_us_per_s: 300.0
+    behind_enter_deg: 125.0
+    behind_exit_deg: 70.0
+    neutral_us: 1500
+    level1_us: 1565
+    level2_us: 1575
+    level3_us: 1650
+    reach_radius_m: 2.0
+    approach_slow_radius_m: 8.0
 
 thruster_node:
   ros__parameters:

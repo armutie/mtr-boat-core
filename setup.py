@@ -22,13 +22,17 @@ setup(
             "radar_nav.*",
             "thruster_control",
             "thruster_control.*",
+            "web_dashboard",
+            "web_dashboard.*",
         ]
     ),
+    package_data={"web_dashboard": ["*.css", "*.html", "*.js"]},
     py_modules=["mmwave_uart"],
     data_files=[
         ("share/ament_index/resource_index/packages", [f"resource/{package_name}"]),
         (f"share/{package_name}", ["package.xml"]),
         (f"share/{package_name}/launch", glob("launch/*.launch.py")),
+        (f"share/{package_name}/config", glob("config/*.json")),
         (f"share/{package_name}/config", glob("config/ros/*.yaml")),
         (f"share/{package_name}/config/radar", glob("config/radar/*.cfg")),
         (f"share/{package_name}/config/udev", glob("config/udev/*.rules")),
@@ -41,6 +45,7 @@ setup(
     license="MIT",
     entry_points={
         "console_scripts": [
+            "autonomy_node = boat_ros.autonomy_node:main",
             "bno055_node = boat_ros.bno055_node:main",
             "camera_node = boat_ros.camera_node:main",
             "control_supervisor_node = boat_ros.control_supervisor_node:main",
@@ -49,6 +54,7 @@ setup(
             "radar_uart_node = boat_ros.radar_uart_node:main",
             "radar_nav_node = boat_ros.radar_nav_node:main",
             "thruster_node = boat_ros.thruster_node:main",
+            "web_dashboard = web_dashboard.server:main",
         ],
     },
 )

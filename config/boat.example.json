@@ -41,8 +41,9 @@
   },
   "ros_control": {
     "operator_topic": "cmd_vel/operator",
-    "auto_topic": "cmd_vel/auto",
     "mode_request_topic": "control/mode_request",
+    "route_topic": "autonomy/route",
+    "autonomy_status_topic": "autonomy/status",
     "max_linear_mps": 1.0,
     "max_angular_rps": 1.0
   },

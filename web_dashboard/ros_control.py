@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
 
 from thruster_control import (
     ThrusterMapping,
     manual_to_pair,
-    pair_to_manual,
 )
 
 
@@ -23,8 +23,9 @@ class RosCommandBridge:
         max_linear_mps: float = 1.0,
         max_angular_rps: float = 1.0,
         operator_topic: str = "cmd_vel/operator",
-        auto_topic: str = "cmd_vel/auto",
         mode_topic: str = "control/mode_request",
+        route_topic: str = "autonomy/route",
+        autonomy_status_topic: str = "autonomy/status",
     ) -> None:
         self.control_state = control_state
         self.mapping = mapping
@@ -32,10 +33,17 @@ class RosCommandBridge:
         self.max_linear_mps = max(0.01, max_linear_mps)
         self.max_angular_rps = max(0.01, max_angular_rps)
         self.operator_topic = operator_topic
-        self.auto_topic = auto_topic
         self.mode_topic = mode_topic
+        self.route_topic = route_topic
+        self.autonomy_status_topic = autonomy_status_topic
         self._lock = threading.Lock()
         self._status = "ros-control starting"
+        self._waypoints: list[dict] = []
+        self._route_version = 0
+        self._autonomy_status = {
+            "state": "idle",
+            "reason": "no route",
+        }
         self._effective = {
             "throttle": 0.0,
             "steering": 0.0,
@@ -67,6 +75,55 @@ class RosCommandBridge:
         with self._lock:
             return dict(self._effective)
 
+    def set_waypoints(self, records: list[dict]) -> dict:
+        waypoints = []
+        for index, record in enumerate(records):
+            if not isinstance(record, dict):
+                raise ValueError(f"waypoint {index + 1} must be an object")
+            try:
+                latitude = float(record["lat"])
+                longitude = float(record["lon"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"waypoint {index + 1} requires numeric lat/lon"
+                ) from exc
+            waypoints.append(
+                {
+                    "lat": latitude,
+                    "lon": longitude,
+                    "label": str(record.get("label", "")),
+                }
+            )
+        with self._lock:
+            self._waypoints = waypoints
+            self._route_version += 1
+            self._autonomy_status = {
+                "state": "idle",
+                "reason": "route loaded" if waypoints else "route cleared",
+                "active_index": 0,
+                "total": len(waypoints),
+            }
+        self.control_state.set_auto_status(self.status())
+        return self.route_snapshot()
+
+    def route_snapshot(self) -> dict:
+        with self._lock:
+            return {
+                "waypoints": [dict(item) for item in self._waypoints],
+                "status": dict(self._autonomy_status),
+            }
+
+    def status(self) -> dict:
+        with self._lock:
+            return dict(self._autonomy_status)
+
+    def can_arm(self) -> tuple[bool, str]:
+        with self._lock:
+            has_route = bool(self._waypoints)
+        if not has_route:
+            return False, "auto requires at least one waypoint"
+        return True, "auto ready"
+
     def _set_status(
         self,
         status: str,
@@ -96,6 +153,12 @@ class RosCommandBridge:
         try:
             import rclpy
             from geometry_msgs.msg import Twist
+            from rclpy.executors import SingleThreadedExecutor
+            from rclpy.qos import (
+                DurabilityPolicy,
+                QoSProfile,
+                ReliabilityPolicy,
+            )
             from std_msgs.msg import String
 
             context = rclpy.context.Context()
@@ -109,28 +172,55 @@ class RosCommandBridge:
                 self.operator_topic,
                 10,
             )
-            auto_publisher = node.create_publisher(
-                Twist,
-                self.auto_topic,
-                10,
+            route_qos = QoSProfile(
+                depth=1,
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            )
+            route_publisher = node.create_publisher(
+                String,
+                self.route_topic,
+                route_qos,
             )
             mode_publisher = node.create_publisher(
                 String,
                 self.mode_topic,
                 10,
             )
+            node.create_subscription(
+                String,
+                self.autonomy_status_topic,
+                self._on_autonomy_status,
+                10,
+            )
+            executor = SingleThreadedExecutor(context=context)
+            executor.add_node(node)
         except Exception as exc:
             self._set_status("ros-control error", error=str(exc))
             return
 
         period = 1.0 / self.send_hz
+        published_route_version = -1
         try:
             while not self._stop_event.is_set():
                 started = time.monotonic()
+                executor.spin_once(timeout_sec=0.0)
                 intent = self.control_state.command_snapshot()
                 mode = str(intent.get("mode", "off"))
                 throttle = 0.0
                 steering = 0.0
+
+                with self._lock:
+                    route_version = self._route_version
+                    waypoints = [dict(item) for item in self._waypoints]
+                if route_version != published_route_version:
+                    route_message = String()
+                    route_message.data = json.dumps(
+                        {"waypoints": waypoints},
+                        separators=(",", ":"),
+                    )
+                    route_publisher.publish(route_message)
+                    published_route_version = route_version
 
                 mode_message = String()
                 mode_message.data = mode
@@ -147,33 +237,12 @@ class RosCommandBridge:
                     )
                     operator_publisher.publish(operator)
 
-                elif mode == "auto":
-                    left_us = intent.get("left_us")
-                    right_us = intent.get("right_us")
-                    if (
-                        not intent.get("stale", False)
-                        and left_us is not None
-                        and right_us is not None
-                    ):
-                        throttle, steering = pair_to_manual(
-                            float(left_us),
-                            float(right_us),
-                            self.mapping,
-                        )
-                    automatic = Twist()
-                    automatic.linear.x = (
-                        throttle * self.max_linear_mps
+                if mode != "auto":
+                    self._set_status(
+                        "ros-control",
+                        throttle=throttle,
+                        steering=steering,
                     )
-                    automatic.angular.z = (
-                        steering * self.max_angular_rps
-                    )
-                    auto_publisher.publish(automatic)
-
-                self._set_status(
-                    "ros-control",
-                    throttle=throttle,
-                    steering=steering,
-                )
                 elapsed = time.monotonic() - started
                 self._stop_event.wait(max(0.0, period - elapsed))
         except Exception as exc:
@@ -183,7 +252,51 @@ class RosCommandBridge:
                 mode_message = String()
                 mode_message.data = "off"
                 mode_publisher.publish(mode_message)
+                executor.remove_node(node)
+                executor.shutdown()
                 node.destroy_node()
                 rclpy.shutdown(context=context)
             except Exception:
                 pass
+
+    def _on_autonomy_status(self, message) -> None:
+        try:
+            status = json.loads(message.data)
+            if not isinstance(status, dict):
+                return
+        except (TypeError, json.JSONDecodeError):
+            return
+
+        output = status.get("output", {})
+        left_us = output.get("left_us")
+        right_us = output.get("right_us")
+        throttle = float(output.get("throttle", 0.0))
+        steering = float(output.get("steering", 0.0))
+        with self._lock:
+            self._autonomy_status = dict(status)
+            self._status = "ros-control"
+            self._effective = {
+                "throttle": round(throttle, 4),
+                "steering": round(steering, 4),
+                "left_us": (
+                    self.mapping.neutral_us
+                    if left_us is None
+                    else int(left_us)
+                ),
+                "right_us": (
+                    self.mapping.neutral_us
+                    if right_us is None
+                    else int(right_us)
+                ),
+                "send_hz": self.send_hz,
+                "error": None,
+            }
+        if left_us is not None and right_us is not None:
+            self.control_state.apply_auto_pwm(
+                int(left_us),
+                int(right_us),
+                str(status.get("reason", "autonomy update")),
+                status,
+            )
+        else:
+            self.control_state.set_auto_status(status)

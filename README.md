@@ -10,17 +10,17 @@ messages, while hardware access stays in one owning node per device.
 
 ```text
 sensors -> ROS 2 topics -> decisions -> control supervisor -> ESP32
-           implemented    evolving      implemented
+           implemented    implemented    implemented
 ```
 
-The sensor and manual-control paths are ready for bench testing. Perception and
-autonomous safety logic are still evolving.
+The full ROS runtime is ready for Orange Pi bench testing. Autonomy behavior
+will continue to evolve inside its ROS node.
 
 ## Hardware status
 
 | Device | ROS interface | Status |
 | --- | --- | --- |
-| Serial GNSS | `/gnss/fix` | Enabled by default |
+| Serial GNSS | `/gnss/fix`, `/gnss/velocity` | Enabled by default |
 | BNO055 | IMU, orientation, magnetic field, temperature, diagnostics | Default IMU and dashboard source |
 | MPU-6050 | `/imu/data_raw` | Available with `imu_driver:=mpu6050` |
 | Arducam UVC | `/camera/image_raw` and port 8081 viewer | Enabled by default |
@@ -61,16 +61,17 @@ cp ~/mtr_ws/src/mtr-boat-core/config/ros/boat.example.yaml \
 nano ~/mtr_ws/src/mtr-boat-core/config/ros/boat.local.yaml
 ```
 
-Launch the default GNSS, BNO055, and camera nodes:
+Launch sensors, autonomy, control, and the dashboard:
 
 ```bash
 cd ~/mtr_ws
 source install/setup.bash
 PARAMS="$PWD/src/mtr-boat-core/config/ros/boat.local.yaml"
-ros2 launch mtr_boat_core sensors.launch.py params_file:="$PARAMS"
+ros2 launch mtr_boat_core boat.launch.py params_file:="$PARAMS"
 ```
 
-LiDAR and all measured mounting transforms are disabled by default.
+Open `http://<orange-pi-ip>:8080`. LiDAR, radar, thrusters, and unmeasured
+mounting transforms are disabled by default.
 
 ## Common launch modes
 
@@ -80,12 +81,16 @@ ros2 launch mtr_boat_core sensors.launch.py \
   params_file:="$PARAMS" imu_driver:=mpu6050
 
 # Enable the Seyond LiDAR
-ros2 launch mtr_boat_core sensors.launch.py \
+ros2 launch mtr_boat_core boat.launch.py \
   params_file:="$PARAMS" enable_lidar:=true
 
-# Camera only
+# Sensor-only bring-up
 ros2 launch mtr_boat_core sensors.launch.py \
-  params_file:="$PARAMS" enable_gnss:=false enable_imu:=false
+  params_file:="$PARAMS"
+
+# Enable physical thrusters only after dry testing
+ros2 launch mtr_boat_core boat.launch.py \
+  params_file:="$PARAMS" enable_thruster:=true
 ```
 
 Camera viewer:
@@ -103,8 +108,8 @@ ros2 topic echo /gnss/fix --once
 ros2 topic echo /diagnostics --once
 ```
 
-Manual dashboard control through ROS is documented in
-[docs/control.md](docs/control.md). The thruster node is disabled by default.
+Dashboard control uses ROS by default. Direct serial operation is an explicit
+legacy bench mode.
 
 ## Documentation
 

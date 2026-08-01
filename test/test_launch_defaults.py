@@ -81,6 +81,42 @@ class ControlLaunchDefaultsTests(unittest.TestCase):
         self.fail("enable_thruster launch argument not found")
 
 
+class BoatLaunchDefaultsTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        launch_source = Path("launch/boat.launch.py").read_text(
+            encoding="utf-8",
+        )
+        cls.launch_tree = ast.parse(launch_source)
+
+    def launch_default(self, argument: str) -> str | None:
+        for node in ast.walk(self.launch_tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if not isinstance(node.func, ast.Name):
+                continue
+            if node.func.id != "DeclareLaunchArgument" or not node.args:
+                continue
+            if not isinstance(node.args[0], ast.Constant):
+                continue
+            if node.args[0].value != argument:
+                continue
+            for keyword in node.keywords:
+                if (
+                    keyword.arg == "default_value"
+                    and isinstance(keyword.value, ast.Constant)
+                ):
+                    return str(keyword.value.value)
+        return None
+
+    def test_full_runtime_starts_dashboard_and_autonomy(self) -> None:
+        self.assertEqual(self.launch_default("enable_dashboard"), "true")
+        self.assertEqual(self.launch_default("enable_autonomy"), "true")
+
+    def test_full_runtime_keeps_thrusters_disabled(self) -> None:
+        self.assertEqual(self.launch_default("enable_thruster"), "false")
+
+
 class Bno055DefaultsTests(unittest.TestCase):
     def test_fused_orientation_is_published_for_the_dashboard(self) -> None:
         config = Path("config/ros/boat.example.yaml").read_text(

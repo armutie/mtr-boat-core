@@ -8,6 +8,7 @@ create a real hardware, safety, or computation boundary.
 
 ```text
 GNSS driver --------> /gnss/fix          sensor_msgs/NavSatFix
+                    -> /gnss/velocity     geometry_msgs/TwistStamped
 IMU driver ---------> /imu/data_raw      sensor_msgs/Imu
 BNO055 auxiliary ---> /imu/mag           sensor_msgs/MagneticField
                     -> /imu/temperature  sensor_msgs/Temperature
@@ -18,6 +19,9 @@ BNO055 optional ----> /imu/data          sensor_msgs/Imu
 camera driver ------> /camera/image_raw  sensor_msgs/Image
 LiDAR driver --------> /lidar/points      sensor_msgs/PointCloud2
 ```
+
+GNSS velocity uses the `map` ENU convention: linear X is east and linear Y is
+north. Course is recovered with `atan2(east, north)`.
 
 GNSS, MPU-6050, BNO055, and camera nodes are implemented in `boat_ros`. The
 LiDAR driver is implemented in the bundled `seyond_mapping` package. The
@@ -111,18 +115,20 @@ at launch. Distances are metres and angles are radians.
 - Do not send actuator output directly from the dashboard or perception nodes.
 - Preserve the ESP32 timeout-to-neutral behavior and physical power cutoff.
 
-## Control boundary
+## Autonomy and control
 
 ```text
-cmd_vel/operator --\
-                  control_supervisor_node -> cmd_vel -> thruster_node -> ESP32
-cmd_vel/auto -----/
+GNSS + IMU + route -> autonomy_node -> cmd_vel/auto --\
+dashboard -------------------------> cmd_vel/operator  |-> control supervisor
+dashboard -------------------------> control/mode -----/        |
+                                                               v
+                                                        cmd_vel -> ESP32
 ```
 
-The supervisor has `off`, `manual`, and `auto` modes. Manual mode selects the
-operator command. Auto mode selects the automatic command and adds any fresh
-operator input as a correction. Both the supervisor and thruster node return
-to zero when commands become stale.
+The dashboard is an operator interface, not the autonomy runtime. It publishes
+routes and operator intent. `autonomy_node` owns waypoint decisions and
+publishes `/cmd_vel/auto`. The supervisor selects manual or auto output and can
+blend a fresh operator correction into auto mode.
 
 Only `thruster_node` may open the ESP32 serial port in normal operation. It is
 disabled by default in `control.launch.py` and requires the bundled

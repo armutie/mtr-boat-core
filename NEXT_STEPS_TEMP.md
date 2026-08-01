@@ -6,7 +6,9 @@ Temporary working plan. Do not treat this as final architecture.
 
 - **Manual control on dashboard** — wheel, throttle, stop, mode pills, command staleness, actuator bridge @ 20 Hz, dry-run/live ESP32 path.
 - **Auto mission planner UI** — map (OSM + overzoom), add/move pins, route line, GNSS boat marker + track, Follow/Fit, health chips, auto status readouts.
-- **Auto backend v1** — `gnss/geo.py`, `radar_nav/waypoint.py`, `web_dashboard/auto_controller.py` (guesstimate PWM controller), `POST /api/control/waypoints`, direct auto PWM through actuator bridge.
+- **Auto backend v1** — `boat_core/autonomy.py` behind
+  `boat_ros/autonomy_node.py`; the dashboard publishes routes and the node
+  publishes `/cmd_vel/auto`.
 - **UI/server mode split** — `surfaceMode` (planner vs wheel) separate from server drive mode; auto planner stays open even when arm preconditions fail.
 - **Offline helpers** — `scripts/test_auto_waypoint.py`, `scripts/test_gnss_imu_heading.py`, `scripts/test_auto_guesstimate.py`.
 - **Waypoint input format (for now)** — map pin click + localStorage route persistence.
@@ -24,7 +26,8 @@ Temporary working plan. Do not treat this as final architecture.
 
 **Use data from:** `scripts/test_gnss_imu_heading.py` — pick anchor speed threshold, jitter-aware reach radius, and max GNSS–IMU disagreement from recorded phases.
 
-**Files likely touched:** `web_dashboard/auto_controller.py`, maybe small helper in `imu/state.py` or new `navigation/heading.py`.
+**Files likely touched:** `boat_core/autonomy.py` and
+`boat_ros/autonomy_node.py`.
 
 ## Auto mode — still rough (after IMU heading)
 
@@ -55,5 +58,5 @@ Goal: waypoint command = desired motion; radar = constraint.
 
 ## Open decisions
 
-- Typed command message and safety/arbiter boundary for the future actuator ROS node.
+- Mission interface beyond the current transient route topic.
 - Phone-first vs laptop-first operator UI polish.

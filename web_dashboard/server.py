@@ -19,6 +19,7 @@ REPO_ROOT = ROOT.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from web_dashboard.gnss_ros import RosGnssReader
 from web_dashboard.imu_ros import RosImuReader, empty_imu_record
 
 
@@ -266,6 +267,7 @@ class RosMmwaveState:
     def _spin_ros(self) -> None:
         try:
             import rclpy
+            from rclpy.executors import SingleThreadedExecutor
             from rclpy.node import Node
             from std_msgs.msg import String
         except ImportError as exc:
@@ -274,19 +276,26 @@ class RosMmwaveState:
             return
 
         class DashboardRosNode(Node):
-            def __init__(node_self, outer: RosMmwaveState) -> None:
-                super().__init__("mtr_sensor_dashboard")
+            def __init__(
+                node_self,
+                outer: RosMmwaveState,
+                **kwargs,
+            ) -> None:
+                super().__init__("mtr_sensor_dashboard", **kwargs)
                 node_self.create_subscription(String, outer.nav_state_topic, outer._on_nav_state, 10)
                 node_self.get_logger().info(f"Dashboard subscribed to {outer.nav_state_topic}")
 
+        context = rclpy.context.Context()
         try:
-            rclpy.init(args=None)
-            node = DashboardRosNode(self)
+            rclpy.init(context=context)
+            node = DashboardRosNode(self, context=context)
+            executor = SingleThreadedExecutor(context=context)
             try:
-                rclpy.spin(node)
+                rclpy.spin(node, executor=executor)
             finally:
+                executor.shutdown()
                 node.destroy_node()
-                rclpy.shutdown()
+                rclpy.shutdown(context=context)
         except Exception as exc:
             with self._lock:
                 self._error = f"ROS2 dashboard subscriber failed: {exc}"
@@ -711,7 +720,7 @@ class DashboardState:
     def __init__(
         self,
         mmwave_state,
-        gnss_reader: "LiveGnssReader | None",
+        gnss_reader: "LiveGnssReader | RosGnssReader | None",
         imu_reader: "LiveImuReader | RosImuReader | None",
         log_paths: dict[str, str],
         manual_slew_per_s: float = 0.0,
@@ -1422,18 +1431,6 @@ def _platform_candidates(linux_candidates: list[str]) -> list[str]:
     return WINDOWS_COM_CANDIDATES if sys.platform.startswith("win") else linux_candidates
 
 
-def _serial_device_present(preferred: str | None, fallback: list[str] | None = None) -> bool:
-    if sys.platform.startswith("win"):
-        return preferred is not None
-    return any(Path(port).exists() for port in _serial_candidates(preferred, fallback))
-
-
-def _i2c_device_present(bus: int) -> bool:
-    if sys.platform.startswith("win"):
-        return False
-    return Path(f"/dev/i2c-{bus}").exists()
-
-
 def _log_path(name: str) -> Path:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return REPO_ROOT / "logs" / f"dashboard_{name}_{stamp}.jsonl"
@@ -1452,17 +1449,18 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=PORT)
     parser.add_argument("--config", default="config/boat.local.json")
     parser.add_argument("--demo", action="store_true", help="Use simulated live sensor data")
-    parser.add_argument("--ros", action="store_true", help="Subscribe to ROS2 mmWave topic")
+    parser.add_argument("--ros", action="store_true", help="Use the default ROS2 mmWave topic (legacy alias)")
     parser.add_argument("--direct-mmwave", action="store_true", help="Force direct mmWave UART mode")
-    parser.add_argument("--no-mmwave", action="store_true", help="Do not auto-start direct mmWave UART mode")
+    parser.add_argument("--no-mmwave", action="store_true", help="Disable the mmWave feed")
     parser.add_argument("--mmwave-topic", default="radar/nav_state_json", help="ROS2 std_msgs/String mmWave nav topic")
     parser.add_argument("--cfg-port", help="mmWave CFG / CLI UART port, e.g. COM6 or /dev/ttyUSB0")
     parser.add_argument("--cfg-file", help="Path to TI mmWave .cfg file")
     parser.add_argument("--data-port", help="mmWave DATA UART port, e.g. COM5 or /dev/ttyUSB1")
     parser.add_argument("--baud", type=int, help="mmWave DATA UART baud")
     parser.add_argument("--stale-after-s", type=float, default=2.0, help="Seconds before a ROS feed is marked stale")
-    parser.add_argument("--gnss", action="store_true", help="Force GNSS NMEA serial mode")
-    parser.add_argument("--no-gnss", action="store_true", help="Do not auto-start GNSS serial mode")
+    parser.add_argument("--gnss", action="store_true", help="Use direct GNSS serial mode (legacy alias)")
+    parser.add_argument("--direct-gnss", action="store_true", help="Use the legacy direct GNSS serial reader")
+    parser.add_argument("--no-gnss", action="store_true", help="Disable the GNSS feed")
     parser.add_argument("--gnss-port", help="GNSS serial port")
     parser.add_argument("--gnss-baud", type=int, help="GNSS serial baud")
     parser.add_argument("--imu", action="store_true", help="Use the legacy direct MPU-6050 reader")
@@ -1476,7 +1474,8 @@ def main() -> None:
     parser.add_argument("--esp32-port", help="ESP32 thruster serial port (e.g. COM3 or /dev/ttyACM0)")
     parser.add_argument("--esp32-baud", type=int, help="ESP32 serial baud")
     parser.add_argument("--actuator-dry-run", action="store_true", help="Do not write motor commands to the ESP32")
-    parser.add_argument("--ros-control", action="store_true", help="Publish dashboard commands through ROS 2")
+    parser.add_argument("--ros-control", action="store_true", help="Use ROS 2 control (now the default)")
+    parser.add_argument("--direct-control", action="store_true", help="Use the legacy direct ESP32 control path")
     parser.add_argument("--snapshot-hz", type=float, help="SSE telemetry rate (Hz, default 15)")
     parser.add_argument("--send-hz", type=float, help="Actuator command send rate (Hz, default 20)")
     parser.add_argument("--manual-slew-per-s", type=float, help="Per-axis slew limit (units/s, default 4.0)")
@@ -1542,31 +1541,37 @@ def main() -> None:
 
     SNAPSHOT_HZ = max(1.0, snapshot_hz)
 
-    auto_direct_mmwave = (
+    if args.ros and args.direct_mmwave:
+        parser.error("--ros and --direct-mmwave are mutually exclusive")
+    if args.ros_control and args.direct_control:
+        parser.error("--ros-control and --direct-control are mutually exclusive")
+
+    use_direct_mmwave = args.direct_mmwave and not args.no_mmwave
+    use_ros_mmwave = (
         not args.demo
-        and not args.ros
         and not args.no_mmwave
-        and bool(data_port)
-        and _serial_device_present(data_port, _platform_candidates([f"/dev/ttyUSB{i}" for i in range(3)]))
+        and not use_direct_mmwave
     )
-    use_direct_mmwave = args.direct_mmwave or auto_direct_mmwave
-    auto_gnss = (
+    use_direct_gnss = (
         not args.demo
         and not args.no_gnss
-        and bool(gnss_port)
-        and _serial_device_present(gnss_port, _platform_candidates(LINUX_TTY_CANDIDATES))
+        and (args.direct_gnss or args.gnss or bool(args.gnss_port))
     )
-    use_gnss = args.gnss or bool(args.gnss_port) or auto_gnss
+    use_ros_gnss = (
+        not args.demo
+        and not args.no_gnss
+        and not use_direct_gnss
+    )
     use_direct_imu = args.imu and not args.no_imu
     use_ros_imu = not args.demo and not args.no_imu and not use_direct_imu
-
-    modes = [args.demo, args.ros, use_direct_mmwave]
-    if sum(1 for enabled in modes if enabled) > 1:
-        parser.error("--demo, --ros, and direct mmWave mode are mutually exclusive")
+    use_ros_control = (
+        not args.demo
+        and not args.direct_control
+    )
 
     if args.demo:
         mmwave_state = DemoSensorState(started_at)
-    elif args.ros:
+    elif use_ros_mmwave:
         mmwave_state = RosMmwaveState(started_at, nav_state_topic=args.mmwave_topic, stale_after_s=args.stale_after_s)
     elif use_direct_mmwave:
         if not data_port:
@@ -1593,13 +1598,21 @@ def main() -> None:
         log_paths = {}
     gnss_reader = None
     imu_reader = None
-    if use_gnss:
+    if use_direct_gnss:
         if not gnss_port:
             parser.error("--gnss-port is required unless set in config")
         gnss_log = JsonlLog(_log_path("gnss")) if args.log else None
         if gnss_log is not None:
             log_paths["gnss"] = str(gnss_log.path)
         gnss_reader = LiveGnssReader(gnss_port, gnss_baud, gnss_log)
+    elif use_ros_gnss:
+        gnss_log = JsonlLog(_log_path("gnss")) if args.log else None
+        if gnss_log is not None:
+            log_paths["gnss"] = str(gnss_log.path)
+        gnss_reader = RosGnssReader(
+            stale_after_s=float(auto_config.get("gnss_stale_s", 3.0)),
+            log=gnss_log,
+        )
     if use_direct_imu or use_ros_imu:
         imu_log = JsonlLog(_log_path("imu")) if args.log else None
         if imu_log is not None:
@@ -1621,10 +1634,6 @@ def main() -> None:
         log_paths,
         manual_slew_per_s=manual_slew_per_s,
     )
-    AUTO_CONTROLLER = AutoController(STATE.control, gnss_reader, imu_reader, auto_runtime_cfg)
-    AUTO_ARM_CHECK = AUTO_CONTROLLER.can_arm
-    AUTO_CONTROLLER.start()
-
     mapping = ThrusterMapping(
         neutral_us=int(thruster_config.get("neutral_us", 1500)),
         forward_min_us=int(thruster_config.get("forward_min_us", 1520)),
@@ -1634,7 +1643,8 @@ def main() -> None:
         steering_slowdown=float(thruster_config.get("steering_slowdown", 0.35)),
     )
 
-    if args.ros_control:
+    local_auto_controller = None
+    if use_ros_control:
         from web_dashboard.ros_control import RosCommandBridge
 
         actuator_bridge = RosCommandBridge(
@@ -1653,18 +1663,36 @@ def main() -> None:
                     "cmd_vel/operator",
                 )
             ),
-            auto_topic=str(
-                ros_control_config.get("auto_topic", "cmd_vel/auto")
-            ),
             mode_topic=str(
                 ros_control_config.get(
                     "mode_request_topic",
                     "control/mode_request",
                 )
             ),
+            route_topic=str(
+                ros_control_config.get(
+                    "route_topic",
+                    "autonomy/route",
+                )
+            ),
+            autonomy_status_topic=str(
+                ros_control_config.get(
+                    "autonomy_status_topic",
+                    "autonomy/status",
+                )
+            ),
         )
+        AUTO_CONTROLLER = actuator_bridge
         actuator_status_msg = "ROS 2 control topics"
     else:
+        local_auto_controller = AutoController(
+            STATE.control,
+            gnss_reader,
+            imu_reader,
+            auto_runtime_cfg,
+        )
+        local_auto_controller.start()
+        AUTO_CONTROLLER = local_auto_controller
         esp32_serial = None
         actuator_dry_run = True
         actuator_status_msg = "dry-run (no ESP32 port configured)"
@@ -1694,6 +1722,7 @@ def main() -> None:
             serial_writer=esp32_serial,
             dry_run=actuator_dry_run,
         )
+    AUTO_ARM_CHECK = AUTO_CONTROLLER.can_arm
     STATE.actuator = actuator_bridge
     actuator_bridge.start()
     if actuator_bridge.log_path is not None:
@@ -1722,7 +1751,7 @@ def main() -> None:
     print(f"LAN dashboard: http://<orange-pi-or-laptop-ip>:{args.port}")
     if args.demo:
         print("Mode: demo")
-    elif args.ros:
+    elif use_ros_mmwave:
         print(f"Mode: ROS2 mmWave topic {args.mmwave_topic}")
     elif use_direct_mmwave:
         print(f"Mode: direct mmWave {data_port} @ {data_baud}")
@@ -1730,15 +1759,13 @@ def main() -> None:
         if cfg_port and cfg_file:
             print(f"mmWave config: {cfg_file} via {cfg_port}")
             print(f"mmWave CFG candidates: {mmwave_state.cfg_candidates}")
-        if auto_direct_mmwave and not args.direct_mmwave:
-            print("mmWave auto-started from detected serial device")
     else:
         print("Mode: waiting for live feeds")
-    if gnss_reader is not None:
+    if use_direct_gnss and gnss_reader is not None:
         print(f"GNSS: {gnss_port} @ {gnss_baud}")
         print(f"GNSS candidates: {gnss_reader.candidates}")
-        if auto_gnss and not args.gnss and not args.gnss_port:
-            print("GNSS auto-started from detected serial device")
+    elif use_ros_gnss:
+        print("GNSS: ROS2 topics gnss/fix and gnss/velocity")
     if imu_reader is not None:
         if use_direct_imu:
             print(
@@ -1757,8 +1784,8 @@ def main() -> None:
     try:
         server.serve_forever()
     finally:
-        if AUTO_CONTROLLER is not None:
-            AUTO_CONTROLLER.shutdown()
+        if local_auto_controller is not None:
+            local_auto_controller.shutdown()
         if session_logger is not None:
             session_logger.shutdown()
         actuator_bridge.shutdown()
