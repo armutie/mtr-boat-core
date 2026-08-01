@@ -155,6 +155,7 @@ class RosImuReader:
             import rclpy
             from diagnostic_msgs.msg import DiagnosticArray
             from geometry_msgs.msg import Vector3Stamped
+            from rclpy.executors import SingleThreadedExecutor
             from rclpy.node import Node
             from rclpy.qos import qos_profile_sensor_data
             from sensor_msgs.msg import Imu, MagneticField, Temperature
@@ -215,9 +216,11 @@ class RosImuReader:
         try:
             rclpy.init(context=context)
             node = DashboardImuNode(context=context)
+            executor = SingleThreadedExecutor(context=context)
             try:
-                rclpy.spin(node)
+                rclpy.spin(node, executor=executor)
             finally:
+                executor.shutdown()
                 node.destroy_node()
                 rclpy.shutdown(context=context)
         except Exception as exc:
