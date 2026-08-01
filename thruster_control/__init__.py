@@ -5,6 +5,7 @@ from .esp32_serial import (
     ThrusterPairCommand,
     manual_to_pair,
     nav_output_to_thruster,
+    pair_to_manual,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "ThrusterPairCommand",
     "manual_to_pair",
     "nav_output_to_thruster",
+    "pair_to_manual",
 ]

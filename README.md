@@ -3,18 +3,18 @@
 ROS 2 Humble software for the MTR drowning-prevention boat, running on an
 Orange Pi 5 Plus.
 
-This branch is the ROS 2 integration base. Sensor drivers publish standard ROS
-messages; perception, safety, and actuator control remain separate consumers.
+This branch is the ROS 2 integration base. Sensors and control use standard ROS
+messages, while hardware access stays in one owning node per device.
 
 ## System
 
 ```text
-sensors -> ROS 2 topics -> perception -> command + safety -> ESP32
-           implemented                  in development
+sensors -> ROS 2 topics -> decisions -> control supervisor -> ESP32
+           implemented    evolving      implemented
 ```
 
-The sensor layer is ready for bench testing. The final ROS 2 safety and
-thruster-control boundary is still in development.
+The sensor and manual-control paths are ready for bench testing. Perception and
+autonomous safety logic are still evolving.
 
 ## Hardware status
 
@@ -26,7 +26,7 @@ thruster-control boundary is still in development.
 | Arducam UVC | `/camera/image_raw` and port 8081 viewer | Enabled by default |
 | Seyond D1-R | `/lidar/points` | Opt-in |
 | TI xWR18xx radar | `/radar/raw_points` | Separate ROS node |
-| ESP32 thrusters | Serial bridge | Legacy test path; ROS safety node pending |
+| ESP32 thrusters | `/cmd_vel` via ROS serial owner | Opt-in |
 
 ## Quick start
 
@@ -103,9 +103,13 @@ ros2 topic echo /gnss/fix --once
 ros2 topic echo /diagnostics --once
 ```
 
+Manual dashboard control through ROS is documented in
+[docs/control.md](docs/control.md). The thruster node is disabled by default.
+
 ## Documentation
 
 - [ROS 2 architecture and safety boundaries](docs/ros2_architecture.md)
+- [ROS 2 dashboard and thruster control](docs/control.md)
 - [BNO055 wiring and validation](docs/bno055.md)
 - [Camera setup and browser viewer](docs/camera.md)
 - [Seyond D1-R setup](docs/lidar.md)
@@ -130,5 +134,5 @@ ros2 topic echo /diagnostics --once
 - Do not publish guessed sensor transforms.
 - Do not enable BNO055 fused orientation until its installed axes and heading
   have been validated.
-- Only the future thruster driver should own the ESP32 serial port during
-  autonomous operation.
+- Only the ROS thruster node should own the ESP32 serial port during normal
+  operation.

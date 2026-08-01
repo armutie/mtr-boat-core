@@ -672,7 +672,7 @@ class DashboardState:
         self.control = ControlState(
             manual_slew_per_s=manual_slew_per_s,
         )
-        self.actuator: "ActuatorBridge | None" = None
+        self.actuator = None
 
     def snapshot(self) -> dict:
         snapshot = self.mmwave_state.snapshot()
@@ -1425,6 +1425,7 @@ def main() -> None:
     parser.add_argument("--esp32-port", help="ESP32 thruster serial port (e.g. COM3 or /dev/ttyACM0)")
     parser.add_argument("--esp32-baud", type=int, help="ESP32 serial baud")
     parser.add_argument("--actuator-dry-run", action="store_true", help="Do not write motor commands to the ESP32")
+    parser.add_argument("--ros-control", action="store_true", help="Publish dashboard commands through ROS 2")
     parser.add_argument("--snapshot-hz", type=float, help="SSE telemetry rate (Hz, default 15)")
     parser.add_argument("--send-hz", type=float, help="Actuator command send rate (Hz, default 20)")
     parser.add_argument("--manual-slew-per-s", type=float, help="Per-axis slew limit (units/s, default 4.0)")
@@ -1437,6 +1438,7 @@ def main() -> None:
     esp32_config = section(config, "esp32")
     thruster_config = section(config, "thruster")
     runtime_config = section(config, "runtime")
+    ros_control_config = section(config, "ros_control")
     auto_config = section(config, "auto")
     cfg_port = choose(args.cfg_port, radar_config, "cfg_port")
     cfg_file = choose(args.cfg_file, radar_config, "cfg_file")
@@ -1573,35 +1575,66 @@ def main() -> None:
         steering_slowdown=float(thruster_config.get("steering_slowdown", 0.35)),
     )
 
-    esp32_serial = None
-    actuator_dry_run = True
-    actuator_status_msg = "dry-run (no ESP32 port configured)"
-    esp32_present = bool(esp32_port) and _serial_device_present(
-        esp32_port, _platform_candidates([f"/dev/ttyACM{i}" for i in range(3)])
-    )
-    want_live = not args.actuator_dry_run and bool(esp32_port)
-    if want_live:
-        if not esp32_port:
-            parser.error("--esp32-port is required unless set in config; use --actuator-dry-run to avoid motor output")
-        try:
-            esp32_serial = Esp32ThrusterSerial(esp32_port, baud=esp32_baud)
-            actuator_dry_run = False
-            actuator_status_msg = f"live ({esp32_port} @ {esp32_baud})"
-        except Exception as exc:
-            actuator_dry_run = True
-            actuator_status_msg = f"dry-run (ESP32 open failed: {exc})"
-            print(f"[ACTUATOR] {actuator_status_msg}")
+    if args.ros_control:
+        from web_dashboard.ros_control import RosCommandBridge
 
-    actuator_log_path = _log_path("actuator")
-    actuator_bridge = ActuatorBridge(
-        STATE.control,
-        mapping=mapping,
-        send_hz=send_hz,
-        slew_per_s=manual_slew_per_s,
-        log_path=actuator_log_path,
-        serial_writer=esp32_serial,
-        dry_run=actuator_dry_run,
-    )
+        actuator_bridge = RosCommandBridge(
+            STATE.control,
+            mapping=mapping,
+            send_hz=send_hz,
+            max_linear_mps=float(
+                ros_control_config.get("max_linear_mps", 1.0)
+            ),
+            max_angular_rps=float(
+                ros_control_config.get("max_angular_rps", 1.0)
+            ),
+            operator_topic=str(
+                ros_control_config.get(
+                    "operator_topic",
+                    "cmd_vel/operator",
+                )
+            ),
+            auto_topic=str(
+                ros_control_config.get("auto_topic", "cmd_vel/auto")
+            ),
+            mode_topic=str(
+                ros_control_config.get(
+                    "mode_request_topic",
+                    "control/mode_request",
+                )
+            ),
+        )
+        actuator_status_msg = "ROS 2 control topics"
+    else:
+        esp32_serial = None
+        actuator_dry_run = True
+        actuator_status_msg = "dry-run (no ESP32 port configured)"
+        want_live = not args.actuator_dry_run and bool(esp32_port)
+        if want_live:
+            try:
+                esp32_serial = Esp32ThrusterSerial(
+                    esp32_port,
+                    baud=esp32_baud,
+                )
+                actuator_dry_run = False
+                actuator_status_msg = (
+                    f"live ({esp32_port} @ {esp32_baud})"
+                )
+            except Exception as exc:
+                actuator_status_msg = (
+                    f"dry-run (ESP32 open failed: {exc})"
+                )
+                print(f"[ACTUATOR] {actuator_status_msg}")
+
+        actuator_bridge = ActuatorBridge(
+            STATE.control,
+            mapping=mapping,
+            send_hz=send_hz,
+            slew_per_s=manual_slew_per_s,
+            log_path=_log_path("actuator"),
+            serial_writer=esp32_serial,
+            dry_run=actuator_dry_run,
+        )
     STATE.actuator = actuator_bridge
     actuator_bridge.start()
     if actuator_bridge.log_path is not None:

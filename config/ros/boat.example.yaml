@@ -69,3 +69,33 @@ seyond_pointcloud_node:
     min_range: 0.15
     max_range: 50.0
     publish_second_return: true
+
+control_supervisor_node:
+  ros__parameters:
+    operator_topic: cmd_vel/operator
+    auto_topic: cmd_vel/auto
+    output_topic: cmd_vel
+    mode_request_topic: control/mode_request
+    mode_topic: control/mode
+    publish_rate_hz: 20.0
+    command_timeout_s: 0.5
+    max_linear_mps: 1.0
+    max_angular_rps: 1.0
+
+thruster_node:
+  ros__parameters:
+    port: /dev/ttyACM0
+    baud: 115200
+    command_topic: cmd_vel
+    send_rate_hz: 20.0
+    command_timeout_s: 0.5
+    throttle_slew_per_s: 0.5
+    max_linear_mps: 1.0
+    max_angular_rps: 1.0
+    neutral_us: 1500
+    forward_min_us: 1565
+    forward_max_us: 1650
+    hard_min_us: 1350
+    hard_max_us: 2000
+    steering_slowdown: 0.35
+    require_dual_firmware: true

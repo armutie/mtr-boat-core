@@ -112,24 +112,22 @@ at launch. Distances are metres and angles are radians.
 - Do not send actuator output directly from the dashboard or perception nodes.
 - Preserve the ESP32 timeout-to-neutral behavior and physical power cutoff.
 
-## Expected control boundary
+## Control boundary
 
 ```text
-operator/autonomy request
-          |
-          v
-   command + safety node
-          |
-          v
-     thruster driver
-          |
-          v
-         ESP32
+cmd_vel/operator --\
+                  control_supervisor_node -> cmd_vel -> thruster_node -> ESP32
+cmd_vel/auto -----/
 ```
 
-Only the thruster driver may open the ESP32 serial port. The command and safety
-node will eventually reject stale, disarmed, or unhealthy requests before they
-reach that driver.
+The supervisor has `off`, `manual`, and `auto` modes. Manual mode selects the
+operator command. Auto mode selects the automatic command and adds any fresh
+operator input as a correction. Both the supervisor and thruster node return
+to zero when commands become stale.
+
+Only `thruster_node` may open the ESP32 serial port in normal operation. It is
+disabled by default in `control.launch.py` and requires the bundled
+dual-thruster firmware.
 
 ## Orange Pi constraints
 

@@ -44,5 +44,36 @@ class SensorLaunchDefaultsTests(unittest.TestCase):
                 self.assertEqual(self.launch_default(argument), "false")
 
 
+class ControlLaunchDefaultsTests(unittest.TestCase):
+    def test_thruster_is_disabled_by_default(self) -> None:
+        launch_source = Path("launch/control.launch.py").read_text(
+            encoding="utf-8",
+        )
+        launch_tree = ast.parse(launch_source)
+        for node in ast.walk(launch_tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if not isinstance(node.func, ast.Name):
+                continue
+            if node.func.id != "DeclareLaunchArgument":
+                continue
+            if not node.args or not isinstance(node.args[0], ast.Constant):
+                continue
+            if node.args[0].value != "enable_thruster":
+                continue
+            default = next(
+                (
+                    keyword.value.value
+                    for keyword in node.keywords
+                    if keyword.arg == "default_value"
+                    and isinstance(keyword.value, ast.Constant)
+                ),
+                None,
+            )
+            self.assertEqual(default, "false")
+            return
+        self.fail("enable_thruster launch argument not found")
+
+
 if __name__ == "__main__":
     unittest.main()

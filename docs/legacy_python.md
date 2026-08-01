@@ -45,21 +45,22 @@ python3 scripts/run_nav_replay.py --log LOG_FILE
 Run the dashboard on the Orange Pi:
 
 ```bash
-python3 web_dashboard/server.py --actuator-dry-run
+python3 web_dashboard/server.py --ros-control
 ```
 
 Open `http://<orange-pi-ip>:8080` from a device on the same trusted network.
 Use `--demo` without hardware, or `--ros --mmwave-topic
 radar/nav_state_json` for the ROS radar feed.
 
-Do not use `--actuator-live` until the ESP32, ESC neutral, and physical cutoff
-have been tested.
+Without `--ros-control`, the legacy dashboard opens the configured ESP32 port
+directly. Use `--actuator-dry-run` for a direct-Python bench test with no motor
+output.
 
-## ESP32
+## Legacy ESP32 test
 
-The single-thruster firmware is `esp32_thruster/esp32_thruster.ino`. It expects
-an ESP32 Dev Module, the `ESP32Servo` library, ESC signal on GPIO 33, and serial
-at 115200 baud. It accepts:
+The single-thruster firmware is `esp32_thruster/esp32_thruster.ino`. It is only
+for isolated testing. Normal ROS operation uses
+`esp32_thruster_dual/esp32_thruster_dual.ino`.
 
 ```text
 PWM 1650

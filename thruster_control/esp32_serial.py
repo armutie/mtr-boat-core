@@ -67,6 +67,13 @@ class ThrusterMapping:
         pwm = self.forward_min_us + throttle * (self.forward_max_us - self.forward_min_us)
         return self.clamp_pwm(pwm)
 
+    def pwm_to_throttle(self, pwm_us: float) -> float:
+        if pwm_us <= self.neutral_us:
+            return 0.0
+        span = max(1, self.forward_max_us - self.forward_min_us)
+        throttle = (float(pwm_us) - self.forward_min_us) / span
+        return max(0.02, min(1.0, throttle))
+
 
 def nav_output_to_thruster(output: NavOutput | None, mapping: ThrusterMapping | None = None) -> ThrusterCommand:
     mapping = mapping or ThrusterMapping()
@@ -122,6 +129,25 @@ def manual_to_pair(
         mapping.throttle_to_us(left),
         mapping.throttle_to_us(right),
         f"throttle={throttle:.2f} steering={steering:+.2f} L={left:.2f} R={right:.2f}",
+    )
+
+
+def pair_to_manual(
+    left_us: float,
+    right_us: float,
+    mapping: ThrusterMapping | None = None,
+) -> tuple[float, float]:
+    """Convert a forward-only PWM pair back to throttle and steering."""
+
+    mapping = mapping or ThrusterMapping()
+    left = mapping.pwm_to_throttle(left_us)
+    right = mapping.pwm_to_throttle(right_us)
+    total = left + right
+    if total <= 0.02:
+        return 0.0, 0.0
+    return (
+        max(0.0, min(1.0, total / 2.0)),
+        max(-1.0, min(1.0, (left - right) / total)),
     )
 
 

@@ -43,10 +43,12 @@ setup(
         "console_scripts": [
             "bno055_node = boat_ros.bno055_node:main",
             "camera_node = boat_ros.camera_node:main",
+            "control_supervisor_node = boat_ros.control_supervisor_node:main",
             "gnss_node = boat_ros.gnss_node:main",
             "imu_node = boat_ros.imu_node:main",
             "radar_uart_node = boat_ros.radar_uart_node:main",
             "radar_nav_node = boat_ros.radar_nav_node:main",
+            "thruster_node = boat_ros.thruster_node:main",
         ],
     },
 )
