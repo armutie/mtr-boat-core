@@ -19,7 +19,8 @@ the interface its existing driver should meet when added.
 
 ## Camera contract
 
-The Arducam UVC integration owns `/dev/video0` in `camera_node` and exposes:
+The Arducam UVC integration owns the stable `/dev/mtr_camera` udev alias in
+`camera_node` and exposes:
 
 ```text
 topic:       /camera/image_raw
@@ -38,10 +39,16 @@ so slow perception or DDS consumers cannot queue stale operator video. Depth
 estimation remains a separate consumer so it cannot add latency to the
 operator stream.
 
+The browser server can be disabled independently with `enable_web: false`, and
+a bind failure does not stop ROS image publication. Its default `0.0.0.0:8081`
+endpoint is unauthenticated and uses permissive CORS, so it is for a trusted
+boat LAN only.
+
 The image frame follows the ROS optical convention: X right, Y down, Z forward.
-`sensors.launch.py` publishes both the configurable
-`base_link -> camera_link` mounting transform and the fixed
-`camera_link -> camera_optical_frame` axis transform. Override `camera_x`,
+`sensors.launch.py` always publishes the fixed
+`camera_link -> camera_optical_frame` axis transform while the camera is
+enabled. The configurable `base_link -> camera_link` mounting transform is
+disabled by default and requires `publish_camera_tf:=true`. Set `camera_x`,
 `camera_y`, `camera_z`, `camera_roll`, `camera_pitch`, and `camera_yaw` only
 after measuring the installed pose.
 

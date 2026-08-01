@@ -15,6 +15,7 @@ def generate_launch_description() -> LaunchDescription:
     enable_gnss = LaunchConfiguration("enable_gnss")
     enable_imu = LaunchConfiguration("enable_imu")
     enable_camera = LaunchConfiguration("enable_camera")
+    publish_camera_tf = LaunchConfiguration("publish_camera_tf")
     camera_x = LaunchConfiguration("camera_x")
     camera_y = LaunchConfiguration("camera_y")
     camera_z = LaunchConfiguration("camera_z")
@@ -32,6 +33,11 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("enable_gnss", default_value="true"),
             DeclareLaunchArgument("enable_imu", default_value="true"),
             DeclareLaunchArgument("enable_camera", default_value="true"),
+            DeclareLaunchArgument(
+                "publish_camera_tf",
+                default_value="false",
+                description="Publish the measured base_link to camera_link transform",
+            ),
             DeclareLaunchArgument("camera_x", default_value="0.0"),
             DeclareLaunchArgument("camera_y", default_value="0.0"),
             DeclareLaunchArgument("camera_z", default_value="0.0"),
@@ -86,7 +92,7 @@ def generate_launch_description() -> LaunchDescription:
                     "--child-frame-id",
                     "camera_link",
                 ],
-                condition=IfCondition(enable_camera),
+                condition=IfCondition(publish_camera_tf),
             ),
             Node(
                 package="tf2_ros",

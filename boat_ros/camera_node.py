@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import site
-import sys
 import threading
 import time
 from array import array
@@ -11,20 +9,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlsplit
 
-# This machine has a NumPy 2.x package in the user site while Ubuntu's
-# python3-opencv is built against NumPy 1.x. ROS nodes use the system Python,
-# so keep this hardware driver on the matching system OpenCV/NumPy pair.
-_USER_SITE = site.getusersitepackages()
-if isinstance(_USER_SITE, str):
-    sys.path = [path for path in sys.path if path != _USER_SITE]
-
-import cv2  # noqa: E402
-import gi  # noqa: E402
-import numpy as np  # noqa: E402
-import rclpy  # noqa: E402
-from rclpy.node import Node  # noqa: E402
-from rclpy.qos import qos_profile_sensor_data  # noqa: E402
-from sensor_msgs.msg import Image  # noqa: E402
+import cv2
+import gi
+import numpy as np
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import Image
 
 gi.require_version("Gst", "1.0")
 from gi.repository import Gst  # noqa: E402
@@ -87,10 +78,12 @@ INDEX_HTML = """<!doctype html>
         }
         setRotation(rotation);
         status.dataset.ok = String(value.connected);
+        feed.style.visibility = value.connected ? "visible" : "hidden";
         status.textContent = value.connected
           ? `${value.width}×${value.height} · ${value.fps.toFixed(1)} FPS · ${value.frames} frames`
-          : "Camera disconnected — waiting for /dev/video0";
+          : `Camera disconnected — waiting for ${value.device}`;
       } catch (_) {
+        feed.style.visibility = "hidden";
         status.dataset.ok = "false";
         status.textContent = "Stream server unavailable";
       }
@@ -220,19 +213,39 @@ class CameraRequestHandler(BaseHTTPRequestHandler):
         return
 
 
+def create_camera_http_server(
+    enabled: bool,
+    address: tuple[str, int],
+    node: "CameraNode",
+    logger: Any,
+) -> CameraHttpServer | None:
+    """Create the optional web server without making camera capture depend on it."""
+    if not enabled:
+        return None
+    try:
+        return CameraHttpServer(address, node)
+    except OSError as exc:
+        logger.error(
+            f"Camera web viewer disabled because {address[0]}:{address[1]} "
+            f"could not be bound: {exc}"
+        )
+        return None
+
+
 class CameraNode(Node):
     """Own a UVC camera, publish ROS images, and serve a browser livestream."""
 
     def __init__(self) -> None:
         super().__init__("camera_node")
 
-        self.declare_parameter("device", "/dev/video0")
+        self.declare_parameter("device", "/dev/mtr_camera")
         self.declare_parameter("width", 1280)
         self.declare_parameter("height", 720)
         self.declare_parameter("fps", 30.0)
         self.declare_parameter("frame_id", "camera_optical_frame")
         self.declare_parameter("topic", "/camera/image_raw")
         self.declare_parameter("publish_ros", True)
+        self.declare_parameter("enable_web", True)
         self.declare_parameter("web_bind", "0.0.0.0")
         self.declare_parameter("web_port", 8081)
         self.declare_parameter("web_rotation_deg", 0)
@@ -245,6 +258,7 @@ class CameraNode(Node):
         self.frame_id = str(self.get_parameter("frame_id").value)
         self.topic = str(self.get_parameter("topic").value)
         self.publish_ros = bool(self.get_parameter("publish_ros").value)
+        self.enable_web = bool(self.get_parameter("enable_web").value)
         self.web_rotation_deg = int(self.get_parameter("web_rotation_deg").value)
         if self.web_rotation_deg not in (0, 90, 180, 270):
             raise ValueError("web_rotation_deg must be one of 0, 90, 180, or 270")
@@ -262,7 +276,7 @@ class CameraNode(Node):
         self._condition = threading.Condition()
         self._jpeg: bytes | None = None
         self._stamp: Any | None = None
-        self._sequence = 0
+        self._sequence = -1
         self._frames = 0
         self._ros_frames = 0
         self._connected = False
@@ -278,12 +292,20 @@ class CameraNode(Node):
         if not 0 <= web_port <= 65535:
             raise ValueError("web_port must be between 0 and 65535")
 
-        self._http_server = CameraHttpServer((web_bind, web_port), self)
-        bound_host, bound_port = self._http_server.server_address[:2]
-        self._http_thread = threading.Thread(
-            target=self._http_server.serve_forever,
-            name="camera-http",
-            daemon=True,
+        self._http_server = create_camera_http_server(
+            self.enable_web,
+            (web_bind, web_port),
+            self,
+            self.get_logger(),
+        )
+        self._http_thread = (
+            threading.Thread(
+                target=self._http_server.serve_forever,
+                name="camera-http",
+                daemon=True,
+            )
+            if self._http_server is not None
+            else None
         )
         self._capture_thread = threading.Thread(
             target=self._capture_loop,
@@ -299,14 +321,19 @@ class CameraNode(Node):
             if self.publisher is not None
             else None
         )
-        self._http_thread.start()
+        if self._http_thread is not None:
+            self._http_thread.start()
         self._capture_thread.start()
         if self._ros_thread is not None:
             self._ros_thread.start()
 
-        self.get_logger().info(
-            f"Camera web viewer listening on http://{bound_host}:{bound_port}/"
-        )
+        if self._http_server is not None:
+            bound_host, bound_port = self._http_server.server_address[:2]
+            self.get_logger().info(
+                f"Camera web viewer listening on http://{bound_host}:{bound_port}/"
+            )
+        elif not self.enable_web:
+            self.get_logger().info("Camera web viewer disabled by configuration")
         self.get_logger().info(
             f"Waiting for {self.device}; requested "
             f"native MJPEG {self.requested_width}x{self.requested_height} "
@@ -446,6 +473,12 @@ class CameraNode(Node):
     def _set_disconnected(self) -> None:
         with self._condition:
             self._connected = False
+            self._jpeg = None
+            self._stamp = None
+            self._actual_width = 0
+            self._actual_height = 0
+            self._measured_fps = 0.0
+            self._last_frame_monotonic = 0.0
             self._condition.notify_all()
 
     def latest_jpeg(self) -> bytes | None:
@@ -505,6 +538,8 @@ class CameraNode(Node):
                 "age_ms": age_ms,
                 "ros_topic": self.topic if self.publisher is not None else None,
                 "frame_id": self.frame_id,
+                "web_enabled": self.enable_web,
+                "web_available": self._http_server is not None,
                 "web_rotation_deg": self.web_rotation_deg,
             }
 
@@ -515,12 +550,14 @@ class CameraNode(Node):
                 self._condition.notify_all()
             if self._pipeline is not None:
                 self._pipeline.set_state(Gst.State.NULL)
-            self._http_server.shutdown()
-            self._http_server.server_close()
+            if self._http_server is not None:
+                self._http_server.shutdown()
+                self._http_server.server_close()
             self._capture_thread.join(timeout=3.0)
             if self._ros_thread is not None:
                 self._ros_thread.join(timeout=3.0)
-            self._http_thread.join(timeout=3.0)
+            if self._http_thread is not None:
+                self._http_thread.join(timeout=3.0)
         return super().destroy_node()
 
 

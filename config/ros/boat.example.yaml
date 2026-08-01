@@ -20,13 +20,14 @@ imu_node:
 
 camera_node:
   ros__parameters:
-    device: /dev/video0
+    device: /dev/mtr_camera
     width: 1280
     height: 720
     fps: 30.0
     frame_id: camera_optical_frame
     topic: /camera/image_raw
     publish_ros: true
+    enable_web: true
     web_bind: 0.0.0.0
     web_port: 8081
     web_rotation_deg: 0

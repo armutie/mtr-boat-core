@@ -31,6 +31,7 @@ setup(
         (f"share/{package_name}/launch", glob("launch/*.launch.py")),
         (f"share/{package_name}/config", glob("config/ros/*.yaml")),
         (f"share/{package_name}/config/radar", glob("config/radar/*.cfg")),
+        (f"share/{package_name}/config/udev", glob("config/udev/*.rules")),
     ],
     install_requires=["pynmea2", "pyserial", "setuptools", "smbus2"],
     zip_safe=True,
