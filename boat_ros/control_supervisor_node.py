@@ -5,6 +5,11 @@ import time
 from geometry_msgs.msg import Twist
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import (
+    DurabilityPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+)
 from std_msgs.msg import Int32MultiArray, String
 
 from boat_core.control import (
@@ -24,6 +29,7 @@ class ControlSupervisorNode(Node):
         self.declare_parameter("output_topic", "thrusters/command")
         self.declare_parameter("mode_request_topic", "control/mode_request")
         self.declare_parameter("mode_topic", "control/mode")
+        self.declare_parameter("thruster_session_topic", "thrusters/session")
         self.declare_parameter("publish_rate_hz", 20.0)
         self.declare_parameter("command_timeout_s", 0.5)
         self.declare_parameter("max_linear_mps", 1.0)
@@ -93,6 +99,17 @@ class ControlSupervisorNode(Node):
             self.on_mode,
             10,
         )
+        session_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self.create_subscription(
+            String,
+            str(self.get_parameter("thruster_session_topic").value),
+            self.on_thruster_session,
+            session_qos,
+        )
 
         rate_hz = max(
             1.0,
@@ -128,6 +145,26 @@ class ControlSupervisorNode(Node):
         if self.control.mode != previous_mode:
             self.get_logger().info(
                 f"Control mode: {self.control.mode}"
+            )
+
+    def on_thruster_session(self, message: String) -> None:
+        previous_mode = self.control.mode
+        try:
+            changed = self.control.register_actuator_session(message.data)
+        except ValueError as exc:
+            self.get_logger().warning(str(exc))
+            return
+        if not changed:
+            return
+
+        if previous_mode == "off":
+            self.get_logger().info(
+                "Thruster session registered; control remains off"
+            )
+        else:
+            self.get_logger().warning(
+                "Thruster node restarted; control forced off and must be "
+                "explicitly re-armed"
             )
 
     def publish_command(self) -> None:

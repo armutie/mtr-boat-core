@@ -52,3 +52,9 @@ ros2 topic echo /thrusters/status
 
 Use `web_dashboard --direct-control` only for an isolated legacy bench test,
 never alongside `thruster_node`.
+
+Each thruster-node process publishes a unique session ID. A new session forces
+the control supervisor to `off`, and the thruster node independently keeps its
+output neutral until it observes `off` followed by a deliberate `manual` or
+`auto` selection. Consequently, automatic process respawn restores the serial
+connection without automatically restoring permission to move.

@@ -28,6 +28,28 @@ class PwmCommand:
     right_us: int
 
 
+class ActuatorArmLatch:
+    """Require an observed off state before enabling actuator output."""
+
+    def __init__(self) -> None:
+        self.mode: str | None = None
+        self.armed = False
+        self._off_observed = False
+
+    def update_mode(self, mode: str) -> bool:
+        if mode not in VALID_CONTROL_MODES:
+            raise ValueError(f"mode must be one of {VALID_CONTROL_MODES}")
+
+        previous_mode = self.mode
+        self.mode = mode
+        if mode == "off":
+            self._off_observed = True
+            self.armed = False
+        elif self._off_observed and previous_mode == "off":
+            self.armed = True
+        return self.armed
+
+
 class ControlSupervisor:
     """Select one final left/right actuator command.
 
@@ -56,6 +78,7 @@ class ControlSupervisor:
         self._automatic_at: float | None = None
         self._manual_throttle = 0.0
         self._last_output_at: float | None = None
+        self._actuator_session: str | None = None
 
     def set_mode(self, mode: str) -> None:
         if mode not in VALID_CONTROL_MODES:
@@ -66,6 +89,17 @@ class ControlSupervisor:
             self._manual_throttle = 0.0
             self._last_output_at = None
         self.mode = mode
+
+    def register_actuator_session(self, session_id: str) -> bool:
+        session_id = session_id.strip()
+        if not session_id:
+            raise ValueError("actuator session ID cannot be empty")
+        if session_id == self._actuator_session:
+            return False
+
+        self._actuator_session = session_id
+        self.set_mode("off")
+        return True
 
     def update_operator(self, command: VelocityCommand, now: float) -> None:
         self._operator = self._bounded(command)

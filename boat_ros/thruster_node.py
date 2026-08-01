@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import time
+import uuid
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import (
+    DurabilityPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+)
 from std_msgs.msg import Int32MultiArray, String
 
+from boat_core.control import ActuatorArmLatch
 from thruster_control import (
     Esp32ThrusterSerial,
     ThrusterMapping,
@@ -20,6 +27,8 @@ class ThrusterNode(Node):
         self.declare_parameter("baud", 115200)
         self.declare_parameter("command_topic", "thrusters/command")
         self.declare_parameter("status_topic", "thrusters/status")
+        self.declare_parameter("mode_topic", "control/mode")
+        self.declare_parameter("session_topic", "thrusters/session")
         self.declare_parameter("send_rate_hz", 20.0)
         self.declare_parameter("command_timeout_s", 0.5)
         self.declare_parameter("neutral_us", 1500)
@@ -53,10 +62,21 @@ class ThrusterNode(Node):
         self._left_us = self.mapping.neutral_us
         self._right_us = self.mapping.neutral_us
         self._command_at: float | None = None
+        self._arm_latch = ActuatorArmLatch()
         self.status_publisher = self.create_publisher(
             String,
             str(self.get_parameter("status_topic").value),
             10,
+        )
+        session_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self.session_publisher = self.create_publisher(
+            String,
+            str(self.get_parameter("session_topic").value),
+            session_qos,
         )
 
         self.create_subscription(
@@ -65,13 +85,23 @@ class ThrusterNode(Node):
             self.on_command,
             10,
         )
+        self.create_subscription(
+            String,
+            str(self.get_parameter("mode_topic").value),
+            self.on_mode,
+            10,
+        )
+        session = String()
+        session.data = uuid.uuid4().hex
+        self.session_publisher.publish(session)
         send_rate_hz = max(
             1.0,
             float(self.get_parameter("send_rate_hz").value),
         )
         self.create_timer(1.0 / send_rate_hz, self.send_command)
         self.get_logger().info(
-            f"Thruster node owns {port} at {baud} baud"
+            f"Thruster node owns {port} at {baud} baud; "
+            "output locked until off is observed and control is re-armed"
         )
 
     def on_command(self, message: Int32MultiArray) -> None:
@@ -84,10 +114,30 @@ class ThrusterNode(Node):
         self._right_us = self.mapping.clamp_pwm(message.data[1])
         self._command_at = time.monotonic()
 
+    def on_mode(self, message: String) -> None:
+        was_armed = self._arm_latch.armed
+        try:
+            armed = self._arm_latch.update_mode(
+                message.data.strip().lower()
+            )
+        except ValueError as exc:
+            self.get_logger().warning(str(exc))
+            return
+
+        if not armed:
+            self._left_us = self.mapping.neutral_us
+            self._right_us = self.mapping.neutral_us
+            self._command_at = None
+        if armed and not was_armed:
+            self.get_logger().info("Thruster output explicitly re-armed")
+        elif was_armed and not armed:
+            self.get_logger().info("Thruster output disarmed")
+
     def send_command(self) -> None:
         now = time.monotonic()
         fresh = (
-            self._command_at is not None
+            self._arm_latch.armed
+            and self._command_at is not None
             and now - self._command_at <= self.command_timeout_s
         )
         left_us = (

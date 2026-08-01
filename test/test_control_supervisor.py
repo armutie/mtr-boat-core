@@ -1,6 +1,7 @@
 import unittest
 
 from boat_core.control import (
+    ActuatorArmLatch,
     ControlSupervisor,
     PwmCommand,
     VelocityCommand,
@@ -115,6 +116,55 @@ class ControlSupervisorTests(unittest.TestCase):
         control.set_mode("auto")
         control.update_auto(PwmCommand(1650, 1500), 11.0)
         self.assertEqual(control.output(11.0), PwmCommand(1650, 1500))
+
+    def test_new_actuator_session_forces_off(self) -> None:
+        self.assertTrue(self.control.register_actuator_session("first"))
+        self.control.set_mode("auto")
+        self.control.update_auto(PwmCommand(1600, 1575), 10.0)
+        self.assertEqual(
+            self.control.output(10.1),
+            PwmCommand(1600, 1575),
+        )
+
+        self.assertFalse(self.control.register_actuator_session("first"))
+        self.assertEqual(self.control.mode, "auto")
+        self.assertTrue(self.control.register_actuator_session("second"))
+        self.assertEqual(self.control.mode, "off")
+        self.assertEqual(
+            self.control.output(10.2),
+            PwmCommand(1500, 1500),
+        )
+
+    def test_rejects_an_empty_actuator_session(self) -> None:
+        with self.assertRaises(ValueError):
+            self.control.register_actuator_session(" ")
+
+
+class ActuatorArmLatchTests(unittest.TestCase):
+    def test_requires_off_before_first_arm(self) -> None:
+        latch = ActuatorArmLatch()
+
+        self.assertFalse(latch.update_mode("auto"))
+        self.assertFalse(latch.armed)
+        self.assertFalse(latch.update_mode("off"))
+        self.assertTrue(latch.update_mode("auto"))
+        self.assertTrue(latch.armed)
+
+    def test_off_disarms_and_a_new_selection_rearms(self) -> None:
+        latch = ActuatorArmLatch()
+
+        latch.update_mode("off")
+        latch.update_mode("manual")
+        self.assertTrue(latch.armed)
+        self.assertFalse(latch.update_mode("off"))
+        self.assertFalse(latch.armed)
+        self.assertTrue(latch.update_mode("manual"))
+
+    def test_rejects_an_unknown_mode(self) -> None:
+        latch = ActuatorArmLatch()
+
+        with self.assertRaises(ValueError):
+            latch.update_mode("cruise")
 
 
 if __name__ == "__main__":

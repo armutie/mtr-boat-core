@@ -85,6 +85,7 @@ control_supervisor_node:
     output_topic: thrusters/command
     mode_request_topic: control/mode_request
     mode_topic: control/mode
+    thruster_session_topic: thrusters/session
     publish_rate_hz: 20.0
     command_timeout_s: 0.5
     max_linear_mps: 1.0
@@ -140,6 +141,8 @@ thruster_node:
     baud: 115200
     command_topic: thrusters/command
     status_topic: thrusters/status
+    mode_topic: control/mode
+    session_topic: thrusters/session
     send_rate_hz: 20.0
     command_timeout_s: 0.5
     neutral_us: 1500

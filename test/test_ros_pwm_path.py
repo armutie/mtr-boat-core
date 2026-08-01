@@ -34,6 +34,20 @@ class RosPwmPathTests(unittest.TestCase):
         self.assertNotIn("manual_to_pair", source)
         self.assertNotIn("pair_to_manual", source)
 
+    def test_thruster_restart_requires_explicit_rearm(self) -> None:
+        supervisor = Path(
+            "boat_ros/control_supervisor_node.py"
+        ).read_text(encoding="utf-8")
+        thruster = Path("boat_ros/thruster_node.py").read_text(
+            encoding="utf-8",
+        )
+
+        self.assertIn('"thrusters/session"', supervisor)
+        self.assertIn("register_actuator_session", supervisor)
+        self.assertIn('"thrusters/session"', thruster)
+        self.assertIn("ActuatorArmLatch", thruster)
+        self.assertIn("self._arm_latch.armed", thruster)
+
 
 if __name__ == "__main__":
     unittest.main()
