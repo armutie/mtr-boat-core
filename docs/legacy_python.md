@@ -27,7 +27,7 @@ Stable device names after running `sudo ./scripts/install_udev_rules.sh`:
 | GNSS | `python3 scripts/run_gnss_live.py --log` |
 | MPU-6050 | `python3 scripts/run_imu_live.py` |
 | BNO055 | `python3 scripts/test_bno055_live.py` |
-| Thruster ramp | `python3 scripts/run_thruster_ramp.py` |
+| Thruster ramp | `python3 scripts/run_thruster_ramp.py --channel left` |
 | Radar navigation dry run | `python3 scripts/run_nav_esp32.py --dry-run` |
 | Radar simulation | `python3 scripts/run_nav_sim.py` |
 | Dashboard demo | `python3 web_dashboard/server.py --demo` |
@@ -56,6 +56,21 @@ radar/nav_state_json` for the ROS radar feed.
 Direct hardware access is explicit: `--direct-gnss`, `--direct-mmwave`,
 `--imu`, or `--direct-control`. Use `--actuator-dry-run --direct-control` for
 a direct-Python test with no motor output.
+
+The thruster ramp accepts exact below-neutral values with `--down`, and
+`--channel left|right|both` keeps the other channel neutral. Stop
+`mtr-boat.service` before running it so the service and test do not compete
+for the ESP32 serial port.
+
+```bash
+sudo systemctl stop mtr-boat
+python3 scripts/run_thruster_ramp.py \
+  --config config/boat.example.json \
+  --down --channel right \
+  --start-us 1495 --end-us 1400 \
+  --step-us 5 --hold-s 1.5
+sudo systemctl start mtr-boat
+```
 
 ## Legacy ESP32 test
 
