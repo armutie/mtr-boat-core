@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 
 from geometry_msgs.msg import Twist
@@ -25,6 +26,10 @@ class ControlSupervisorNode(Node):
         super().__init__("control_supervisor_node")
 
         self.declare_parameter("operator_topic", "cmd_vel/operator")
+        self.declare_parameter(
+            "steering_takeover_topic",
+            "control/steering_takeover",
+        )
         self.declare_parameter("auto_topic", "thrusters/auto")
         self.declare_parameter("output_topic", "thrusters/command")
         self.declare_parameter("mode_request_topic", "control/mode_request")
@@ -35,11 +40,17 @@ class ControlSupervisorNode(Node):
         self.declare_parameter("max_linear_mps", 1.0)
         self.declare_parameter("max_angular_rps", 1.0)
         self.declare_parameter("throttle_slew_per_s", 4.0)
+        self.declare_parameter("direction_change_neutral_s", 0.2)
         self.declare_parameter("neutral_us", 1500)
         self.declare_parameter("forward_min_us", 1565)
         self.declare_parameter("forward_max_us", 1650)
+        self.declare_parameter("reverse_level1_us", 1460)
+        self.declare_parameter("reverse_level2_us", 1445)
+        self.declare_parameter("reverse_level3_us", 1425)
         self.declare_parameter("hard_min_us", 1350)
         self.declare_parameter("hard_max_us", 2000)
+        self.declare_parameter("pivot_turn_start", 0.75)
+        self.declare_parameter("pivot_reverse_ratio", 1.0)
 
         self.control = ControlSupervisor(
             command_timeout_s=float(
@@ -54,6 +65,9 @@ class ControlSupervisorNode(Node):
             throttle_slew_per_s=float(
                 self.get_parameter("throttle_slew_per_s").value
             ),
+            direction_change_neutral_s=float(
+                self.get_parameter("direction_change_neutral_s").value
+            ),
             mapping=ThrusterMapping(
                 neutral_us=int(self.get_parameter("neutral_us").value),
                 forward_min_us=int(
@@ -62,11 +76,26 @@ class ControlSupervisorNode(Node):
                 forward_max_us=int(
                     self.get_parameter("forward_max_us").value
                 ),
+                reverse_level1_us=int(
+                    self.get_parameter("reverse_level1_us").value
+                ),
+                reverse_level2_us=int(
+                    self.get_parameter("reverse_level2_us").value
+                ),
+                reverse_level3_us=int(
+                    self.get_parameter("reverse_level3_us").value
+                ),
                 hard_min_us=int(
                     self.get_parameter("hard_min_us").value
                 ),
                 hard_max_us=int(
                     self.get_parameter("hard_max_us").value
+                ),
+                pivot_turn_start=float(
+                    self.get_parameter("pivot_turn_start").value
+                ),
+                pivot_reverse_ratio=float(
+                    self.get_parameter("pivot_reverse_ratio").value
                 ),
             ),
         )
@@ -85,6 +114,12 @@ class ControlSupervisorNode(Node):
             Twist,
             str(self.get_parameter("operator_topic").value),
             self.on_operator,
+            10,
+        )
+        self.create_subscription(
+            String,
+            str(self.get_parameter("steering_takeover_topic").value),
+            self.on_steering_takeover,
             10,
         )
         self.create_subscription(
@@ -132,6 +167,20 @@ class ControlSupervisorNode(Node):
             return
         self.control.update_auto(
             PwmCommand(int(message.data[0]), int(message.data[1])),
+            time.monotonic(),
+        )
+
+    def on_steering_takeover(self, message: String) -> None:
+        try:
+            payload = json.loads(message.data)
+            active = bool(payload["active"])
+            steering = float(payload.get("steering", 0.0))
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            self.get_logger().warning("Ignored invalid steering takeover")
+            return
+        self.control.update_steering_takeover(
+            active,
+            steering,
             time.monotonic(),
         )
 

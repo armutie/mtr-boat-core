@@ -4,7 +4,8 @@ import threading
 import time
 from dataclasses import asdict, dataclass, field
 
-from gnss.geo import bearing_deg, distance_m, heading_error_deg, normalize_angle_deg
+from boat_core.heading import HeadingEstimator, HeadingEstimatorConfig
+from gnss.geo import bearing_deg, distance_m, heading_error_deg
 from radar_nav.waypoint import GeoWaypoint, WaypointControl, WaypointNavConfig
 
 
@@ -14,10 +15,17 @@ class AutoConfig:
     control_hz: float = 10.0
     min_speed_for_course_mps: float = 0.08
     gnss_reanchor_speed_mps: float = 0.3
-    gnss_heading_blend: float = 0.08
+    gnss_heading_blend: float = 0.02
     gnss_stale_s: float = 3.0
     route_match_tolerance_m: float = 1.0
     imu_stale_s: float = 2.0
+    heading_command_stale_s: float = 0.75
+    heading_learn_min_forward_us: int = 1565
+    heading_learn_max_thruster_delta_us: int = 20
+    heading_learn_duration_s: float = 1.0
+    heading_learn_min_samples: int = 5
+    heading_course_stability_deg: float = 10.0
+    heading_course_agreement_deg: float = 45.0
     heading_deadband_deg: float = 8.0
     yaw_rate_deadband_dps: float = 2.0
     yaw_lookahead_s: float = 2.0
@@ -36,24 +44,49 @@ class AutoConfig:
     level1_us: int = 1565
     level2_us: int = 1575
     level3_us: int = 1650
+    reverse_level1_us: int = 1460
+    reverse_level2_us: int = 1445
+    reverse_level3_us: int = 1425
     waypoint: WaypointNavConfig = field(default_factory=WaypointNavConfig)
 
 
 class AutoController:
-    def __init__(self, control_state, gnss_reader, imu_reader=None, config: AutoConfig | None = None) -> None:
+    def __init__(
+        self,
+        control_state,
+        gnss_reader,
+        imu_reader=None,
+        config: AutoConfig | None = None,
+        thruster_reader=None,
+        clock=None,
+    ) -> None:
         self.control_state = control_state
         self.gnss_reader = gnss_reader
         self.imu_reader = imu_reader
+        self.thruster_reader = thruster_reader
         self.config = config or AutoConfig()
         self._lock = threading.Lock()
         self._waypoints: list[GeoWaypoint] = []
         self._active_index = 0
         self._status = self._base_status("idle", "no route")
-        self._heading_deg: float | None = None
-        self._heading_anchor_deg: float | None = None
-        self._heading_anchor_imu_yaw_deg: float | None = None
-        self._heading_source = "uninitialized"
-        self._heading_confidence = "none"
+        self._heading_estimator = HeadingEstimator(
+            HeadingEstimatorConfig(
+                imu_stale_s=self.config.imu_stale_s,
+                command_stale_s=self.config.heading_command_stale_s,
+                min_forward_us=self.config.heading_learn_min_forward_us,
+                max_thruster_delta_us=(
+                    self.config.heading_learn_max_thruster_delta_us
+                ),
+                min_speed_mps=self.config.gnss_reanchor_speed_mps,
+                learn_duration_s=self.config.heading_learn_duration_s,
+                learn_min_samples=self.config.heading_learn_min_samples,
+                course_stability_deg=self.config.heading_course_stability_deg,
+                course_agreement_deg=self.config.heading_course_agreement_deg,
+                correction_blend=self.config.gnss_heading_blend,
+            ),
+            clock=clock,
+        )
+        self._heading_reset_pending = False
         self._pulse_action: str | None = None
         self._pulse_until = 0.0
         self._pulse_observe_until = 0.0
@@ -77,24 +110,47 @@ class AutoController:
         """Run one control update from the latest sensor snapshots."""
         self._tick()
 
+    def relearn_heading(self) -> dict:
+        """Forget the world-heading anchor and wait for a new straight run."""
+        with self._lock:
+            self._heading_reset_pending = True
+        status = self._base_status(
+            "acquiring_heading",
+            "heading reset; drive straight in manual",
+        )
+        status["heading"] = {
+            "state": "uninitialized",
+            "reason": "heading reset; waiting for straight manual motion",
+            "heading_deg": None,
+            "source": "uninitialized",
+            "confidence": "none",
+        }
+        self._set_status(status)
+        self.control_state.apply_auto_pwm(
+            self.config.neutral_us,
+            self.config.neutral_us,
+            status["reason"],
+            status,
+        )
+        return status
+
     def set_waypoints(self, records: list[dict]) -> dict:
         waypoints = [self._coerce_waypoint(record, index) for index, record in enumerate(records)]
         with self._lock:
             active_index = self._next_active_index_for_route_update(waypoints)
-        status = {
-            "state": "idle",
-            "reason": "route loaded" if waypoints else "route cleared",
-            "active_index": active_index,
-            "total": len(waypoints),
-            "target": None,
-            "distance_m": None,
-            "bearing_deg": None,
-            "heading_deg": None,
-            "heading_error_deg": None,
-            "controller": self.config.controller,
-            "control_hz": self.config.control_hz,
-        }
-        with self._lock:
+            status = {
+                "state": "idle",
+                "reason": "route loaded" if waypoints else "route cleared",
+                "active_index": active_index,
+                "total": len(waypoints),
+                "target": None,
+                "distance_m": None,
+                "bearing_deg": None,
+                "heading_deg": None,
+                "heading_error_deg": None,
+                "controller": self.config.controller,
+                "control_hz": self.config.control_hz,
+            }
             self._waypoints = waypoints
             self._active_index = active_index
             self._status = status
@@ -143,8 +199,20 @@ class AutoController:
             mode = self.control_state.mode
         health, gnss = self._gnss_snapshot()
         imu_health, imu = self._imu_snapshot()
+        command_health, command = self._thruster_snapshot()
+        with self._lock:
+            reset_heading = self._heading_reset_pending
+            self._heading_reset_pending = False
+        if reset_heading:
+            self._heading_estimator.reset()
         gnss_ok, gnss_reason = self._valid_gnss(health, gnss)
-        estimate = self._update_heading_estimate(gnss, imu_health, imu)
+        estimate = self._heading_estimator.update(
+            gnss,
+            imu_health,
+            imu,
+            command_health,
+            command,
+        )
 
         if mode != "auto":
             status = self._base_status("idle", "auto not armed")
@@ -179,7 +247,7 @@ class AutoController:
         if heading is None:
             status = self._status_for(
                 "acquiring_heading",
-                "acquiring heading with level 1 forward",
+                "heading not locked; drive straight in manual",
                 waypoint,
                 active_index,
                 total,
@@ -188,17 +256,17 @@ class AutoController:
                 None,
                 None,
                 {
-                    "action": "acquire_heading",
-                    "left_us": self.config.level1_us,
-                    "right_us": self.config.level1_us,
-                    "level": 1,
+                    "action": "wait_for_heading",
+                    "left_us": self.config.neutral_us,
+                    "right_us": self.config.neutral_us,
                     "heading": estimate,
                 },
             )
+            status["heading"] = estimate
             self._set_status(status)
             self.control_state.apply_auto_pwm(
-                self.config.level1_us,
-                self.config.level1_us,
+                self.config.neutral_us,
+                self.config.neutral_us,
                 status["reason"],
                 status,
             )
@@ -251,6 +319,11 @@ class AutoController:
             return "unavailable", {}
         return self.imu_reader.snapshot()
 
+    def _thruster_snapshot(self) -> tuple[str, dict]:
+        if self.thruster_reader is None:
+            return "unavailable", {}
+        return self.thruster_reader.snapshot()
+
     def _valid_gnss(self, health: str, gnss: dict) -> tuple[bool, str]:
         if health not in ("live", "waiting"):
             return False, f"GNSS {health}"
@@ -262,75 +335,6 @@ class AutoController:
         if age is not None and float(age) > self.config.gnss_stale_s:
             return False, "GNSS stale"
         return True, "GNSS ok"
-
-    def _resolve_gnss_heading(self, gnss: dict) -> tuple[float | None, float | None]:
-        heading = gnss.get("heading_deg")
-        speed = gnss.get("speed_mps")
-        speed_f = None if speed is None else float(speed)
-        if heading is None:
-            return None, speed_f
-        if speed_f is None or speed_f < self.config.min_speed_for_course_mps:
-            return None, speed_f
-        return float(heading) % 360.0, speed_f
-
-    def _valid_imu_yaw(self, health: str, imu: dict) -> float | None:
-        if health != "live":
-            return None
-        age = imu.get("age_s")
-        if age is not None and float(age) > self.config.imu_stale_s:
-            return None
-        yaw = imu.get("yaw_relative_deg")
-        if yaw is None:
-            return None
-        return float(yaw)
-
-    def _update_heading_estimate(self, gnss: dict, imu_health: str, imu: dict) -> dict:
-        gnss_heading, speed = self._resolve_gnss_heading(gnss)
-        imu_yaw = self._valid_imu_yaw(imu_health, imu)
-
-        if self._heading_deg is not None and imu_yaw is not None:
-            if self._heading_anchor_deg is None or self._heading_anchor_imu_yaw_deg is None:
-                self._heading_anchor_deg = self._heading_deg
-                self._heading_anchor_imu_yaw_deg = imu_yaw
-            yaw_delta = normalize_angle_deg(imu_yaw - self._heading_anchor_imu_yaw_deg)
-            self._heading_deg = (self._heading_anchor_deg + yaw_delta) % 360.0
-            self._heading_source = "imu"
-            self._heading_confidence = "imu"
-
-        if gnss_heading is not None and self._heading_deg is None:
-            self._heading_deg = gnss_heading
-            self._heading_anchor_deg = gnss_heading
-            self._heading_anchor_imu_yaw_deg = imu_yaw
-            self._heading_source = "gnss_init"
-            self._heading_confidence = "initialized"
-        elif gnss_heading is not None and speed is not None and speed >= self.config.gnss_reanchor_speed_mps:
-            if (
-                imu_yaw is not None
-                and self._heading_anchor_deg is not None
-                and self._heading_anchor_imu_yaw_deg is not None
-            ):
-                error = normalize_angle_deg(gnss_heading - self._heading_deg)
-                blend = max(0.0, min(1.0, self.config.gnss_heading_blend))
-                self._heading_anchor_deg = (self._heading_anchor_deg + error * blend) % 360.0
-                yaw_delta = normalize_angle_deg(imu_yaw - self._heading_anchor_imu_yaw_deg)
-                self._heading_deg = (self._heading_anchor_deg + yaw_delta) % 360.0
-                self._heading_source = "imu_gnss_synced"
-                self._heading_confidence = "anchored"
-            else:
-                self._heading_deg = gnss_heading
-                self._heading_anchor_deg = gnss_heading
-                self._heading_anchor_imu_yaw_deg = imu_yaw
-                self._heading_source = "gnss"
-                self._heading_confidence = "gnss"
-
-        return {
-            "heading_deg": None if self._heading_deg is None else round(self._heading_deg, 2),
-            "source": self._heading_source,
-            "confidence": self._heading_confidence,
-            "gnss_heading_deg": None if gnss_heading is None else round(gnss_heading, 2),
-            "speed_mps": None if speed is None else round(speed, 3),
-            "imu_yaw_relative_deg": None if imu_yaw is None else round(imu_yaw, 2),
-        }
 
     def _valid_imu_yaw_rate(self, health: str, imu: dict) -> float | None:
         if health != "live":
@@ -561,7 +565,11 @@ class AutoController:
                 action = "turn_left"
                 display_action = "turn left"
                 steering_reason = "smooth left correction"
-        target_left, target_right = self._smooth_turn_to_pwm(turn_effort)
+        pivot_reverse = action.startswith("behind_turn")
+        target_left, target_right = self._smooth_turn_to_pwm(
+            turn_effort,
+            pivot_reverse=pivot_reverse,
+        )
         left_us, right_us = self._slew_smooth_pwm(target_left, target_right)
         return WaypointControl(
             distance_m=dist,
@@ -587,6 +595,10 @@ class AutoController:
                 "smooth_turn_deadband": self.config.smooth_turn_deadband,
                 "behind_enter_deg": self.config.behind_enter_deg,
                 "behind_exit_deg": self.config.behind_exit_deg,
+                "pivot_reverse": pivot_reverse,
+                "reverse_level1_us": self.config.reverse_level1_us,
+                "reverse_level2_us": self.config.reverse_level2_us,
+                "reverse_level3_us": self.config.reverse_level3_us,
             },
         )
 
@@ -624,14 +636,29 @@ class AutoController:
             return "turn_right", "turn right", error, "smooth right correction"
         return "turn_left", "turn left", error, "smooth left correction"
 
-    def _smooth_turn_to_pwm(self, turn_effort: float) -> tuple[float, float]:
+    def _smooth_turn_to_pwm(
+        self,
+        turn_effort: float,
+        *,
+        pivot_reverse: bool = False,
+    ) -> tuple[float, float]:
         neutral = float(self.config.neutral_us)
         active = float(self.config.level3_us)
         span = max(0.0, active - neutral)
         if turn_effort > 0.0:
-            return active, active - min(1.0, turn_effort) * span
+            inside = (
+                float(self.config.reverse_level3_us)
+                if pivot_reverse
+                else active - min(1.0, turn_effort) * span
+            )
+            return active, inside
         if turn_effort < 0.0:
-            return active - min(1.0, abs(turn_effort)) * span, active
+            inside = (
+                float(self.config.reverse_level3_us)
+                if pivot_reverse
+                else active - min(1.0, abs(turn_effort)) * span
+            )
+            return inside, active
         return active, active
 
     def _slew_smooth_pwm(self, target_left: float, target_right: float) -> tuple[int, int]:

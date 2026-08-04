@@ -8,6 +8,7 @@ import threading
 import time
 
 from geometry_msgs.msg import TwistStamped
+from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import (
@@ -17,7 +18,7 @@ from rclpy.qos import (
     qos_profile_sensor_data,
 )
 from sensor_msgs.msg import Imu, NavSatFix
-from std_msgs.msg import Int32MultiArray, String
+from std_msgs.msg import Empty, Int32MultiArray, String
 
 from boat_core.autonomy import AutoConfig, AutoController
 from radar_nav.waypoint import WaypointNavConfig
@@ -35,6 +36,10 @@ class SnapshotReader:
         with self._lock:
             self._latest.update(values)
             self._updated_at = time.time()
+
+    def update_metadata(self, values: dict) -> None:
+        with self._lock:
+            self._latest.update(values)
 
     def snapshot(self) -> tuple[str, dict]:
         now = time.time()
@@ -111,8 +116,17 @@ class AutonomyNode(Node):
         self.declare_parameter("fix_topic", "gnss/fix")
         self.declare_parameter("velocity_topic", "gnss/velocity")
         self.declare_parameter("imu_topic", "imu/data")
+        self.declare_parameter("diagnostics_topic", "diagnostics")
+        self.declare_parameter(
+            "thruster_command_topic",
+            "thrusters/command",
+        )
         self.declare_parameter("mode_topic", "control/mode")
         self.declare_parameter("route_topic", "autonomy/route")
+        self.declare_parameter(
+            "heading_reset_topic",
+            "autonomy/relearn_heading",
+        )
         self.declare_parameter("status_topic", "autonomy/status")
         self.declare_parameter("command_topic", "thrusters/auto")
 
@@ -147,6 +161,9 @@ class AutonomyNode(Node):
             neutral_us=self.config.neutral_us,
             forward_min_us=self.config.level1_us,
             forward_max_us=self.config.level3_us,
+            reverse_level1_us=self.config.reverse_level1_us,
+            reverse_level2_us=self.config.reverse_level2_us,
+            reverse_level3_us=self.config.reverse_level3_us,
         )
         self.gnss_reader = SnapshotReader(
             {
@@ -162,8 +179,16 @@ class AutonomyNode(Node):
             {
                 "yaw_relative_deg": None,
                 "gyro_z_dps": None,
+                "calibration": {},
             },
             self.config.imu_stale_s,
+        )
+        self.thruster_reader = SnapshotReader(
+            {
+                "left_us": self.config.neutral_us,
+                "right_us": self.config.neutral_us,
+            },
+            self.config.heading_command_stale_s,
         )
         self.control = AutonomyControlState(self.config.neutral_us)
         self.controller = AutoController(
@@ -171,6 +196,7 @@ class AutonomyNode(Node):
             self.gnss_reader,
             self.imu_reader,
             self.config,
+            thruster_reader=self.thruster_reader,
         )
 
         route_qos = QoSProfile(
@@ -207,6 +233,18 @@ class AutonomyNode(Node):
             qos_profile_sensor_data,
         )
         self.create_subscription(
+            DiagnosticArray,
+            str(self.get_parameter("diagnostics_topic").value),
+            self.on_diagnostics,
+            10,
+        )
+        self.create_subscription(
+            Int32MultiArray,
+            str(self.get_parameter("thruster_command_topic").value),
+            self.on_thruster_command,
+            10,
+        )
+        self.create_subscription(
             String,
             str(self.get_parameter("mode_topic").value),
             self.on_mode,
@@ -217,6 +255,12 @@ class AutonomyNode(Node):
             str(self.get_parameter("route_topic").value),
             self.on_route,
             route_qos,
+        )
+        self.create_subscription(
+            Empty,
+            str(self.get_parameter("heading_reset_topic").value),
+            self.on_heading_reset,
+            10,
         )
         self.create_timer(
             1.0 / max(float(self.config.control_hz), 1.0),
@@ -299,6 +343,12 @@ class AutonomyNode(Node):
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
             self.get_logger().warning(f"Rejected autonomy route: {exc}")
 
+    def on_heading_reset(self, _message: Empty) -> None:
+        self.controller.relearn_heading()
+        self.get_logger().info(
+            "Heading anchor reset; waiting for straight manual motion"
+        )
+
     def update_control(self) -> None:
         self.controller.tick()
         mode, left_us, right_us, reason, status = self.control.output()
@@ -317,7 +367,6 @@ class AutonomyNode(Node):
             right_us,
             self.mapping,
         )
-
         status["reason"] = status.get("reason", reason)
         status["output"] = {
             "left_us": left_us,
@@ -329,10 +378,63 @@ class AutonomyNode(Node):
         message.data = json.dumps(status, separators=(",", ":"))
         self.status_publisher.publish(message)
 
+    def on_diagnostics(self, message: DiagnosticArray) -> None:
+        for status in message.status:
+            if status.name != "BNO055 IMU":
+                continue
+            values = {item.key: item.value for item in status.values}
+            self.imu_reader.update_metadata(
+                {
+                    "calibration": {
+                        "status": (
+                            "error"
+                            if int(status.level) >= DiagnosticStatus.ERROR
+                            else "calibrating"
+                            if int(status.level) == DiagnosticStatus.WARN
+                            else "ready"
+                        ),
+                        "system": self._int_or_none(
+                            values.get("system_calibration")
+                        ),
+                        "gyroscope": self._int_or_none(
+                            values.get("gyroscope_calibration")
+                        ),
+                        "accelerometer": self._int_or_none(
+                            values.get("accelerometer_calibration")
+                        ),
+                        "magnetometer": self._int_or_none(
+                            values.get("magnetometer_calibration")
+                        ),
+                        "recovery_count": self._int_or_none(
+                            values.get("successful_recoveries")
+                        ),
+                        "message": status.message,
+                    }
+                }
+            )
+            break
+
+    def on_thruster_command(self, message: Int32MultiArray) -> None:
+        if len(message.data) < 2:
+            return
+        self.thruster_reader.update(
+            {
+                "left_us": int(message.data[0]),
+                "right_us": int(message.data[1]),
+            }
+        )
+
     @staticmethod
     def _finite_or_none(value) -> float | None:
         number = float(value)
         return number if math.isfinite(number) else None
+
+    @staticmethod
+    def _int_or_none(value) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
 
 def main(args=None) -> None:

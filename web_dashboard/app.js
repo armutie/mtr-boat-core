@@ -21,16 +21,22 @@ const state = {
     stopRetry: null,
     serverManual: null,
     autoRetryAt: 0,
-    limits: { manual_slew_per_s: 0.0, stale_after_s: 0.45 },
+    limits: {
+      manual_slew_per_s: 0.0,
+      stale_after_s: 0.45,
+      pivot_turn_start: 0.75,
+      pivot_reverse_ratio: 1.0,
+    },
     actuatorErrorAt: 0,
     pendingMode: null,
     pendingModeExpires: 0,
   },
   auto: {
     waypoints: [],
+    undoStack: [],
+    selectedWaypointIndex: null,
     actualTrack: [],
     maxTrack: 700,
-    addPinMode: false,
     followBoat: true,
     userControllingMap: false,
     map: null,
@@ -48,6 +54,16 @@ const state = {
     fallbackBounds: null,
     neutralUs: 1500,
     fullUs: 1650,
+    reverseFullUs: 1425,
+    effectiveSteering: 0,
+    autoDesiredSteering: 0,
+    takeoverActive: false,
+    takeoverReported: false,
+    takeoverValue: 0,
+    takeoverPointer: null,
+    takeoverLastPointerAngleDeg: 0,
+    takeoverLastSentAt: 0,
+    wheelMaxDeg: 105,
     defaultCenter: { lat: 43.4748, lon: -80.5392 },
   },
 };
@@ -95,10 +111,16 @@ const modePills = Array.from(document.querySelectorAll(".mode-pill"));
 const controlSurface = document.querySelector(".control-surface");
 const autoMapFrame = document.querySelector(".mission-map-frame");
 const autoMapCanvas = document.getElementById("auto-map-fallback");
-const autoAddPinButton = document.getElementById("auto-add-pin");
+const autoWheelCanvas = document.getElementById("auto-mini-wheel");
+const autoUndoRouteButton = document.getElementById("auto-undo-route");
 const autoClearRouteButton = document.getElementById("auto-clear-route");
+const autoClearCancelButton = document.getElementById("auto-clear-cancel");
+const autoClearConfirmButton = document.getElementById("auto-clear-confirm-button");
 const autoFitRouteButton = document.getElementById("auto-fit-route");
 const autoFollowBoatButton = document.getElementById("auto-follow-boat");
+const autoDeleteWaypointButton = document.getElementById("auto-delete-waypoint");
+const autoCloseWaypointButton = document.getElementById("auto-close-waypoint");
+const autoRelearnHeadingButton = document.getElementById("auto-relearn-heading");
 
 // Cache the high-traffic readout nodes so per-pointermove updates don't pay
 // for a querySelector on every event.
@@ -171,14 +193,17 @@ function bindManualControls() {
 
 function bindAutoMissionControls() {
   loadStoredAutoWaypoints();
-  autoAddPinButton?.addEventListener("click", () => {
-    setAddPinMode(!state.auto.addPinMode);
+  autoUndoRouteButton?.addEventListener("click", () => {
+    undoAutoRouteEdit();
   });
   autoClearRouteButton?.addEventListener("click", () => {
-    state.auto.waypoints = [];
-    persistAutoWaypoints();
-    renderAutoRoute();
-    postAutoWaypoints();
+    $("#auto-clear-confirm")?.removeAttribute("hidden");
+  });
+  autoClearCancelButton?.addEventListener("click", () => {
+    $("#auto-clear-confirm")?.setAttribute("hidden", "");
+  });
+  autoClearConfirmButton?.addEventListener("click", () => {
+    clearAutoRoute();
   });
   autoFitRouteButton?.addEventListener("click", () => fitAutoMap());
   autoFollowBoatButton?.addEventListener("click", () => {
@@ -191,11 +216,26 @@ function bindAutoMissionControls() {
     updateAutoHint();
     if (state.auto.followBoat) renderBoatMarker(true);
   });
-  autoMapCanvas?.addEventListener("click", (evt) => {
-    if (!state.auto.addPinMode) return;
-    const latlon = fallbackPointToLatLon(evt);
-    if (latlon) addAutoWaypoint(latlon.lat, latlon.lon);
+  autoDeleteWaypointButton?.addEventListener("click", () => {
+    deleteSelectedAutoWaypoint();
   });
+  autoCloseWaypointButton?.addEventListener("click", () => {
+    selectAutoWaypoint(null);
+  });
+  autoRelearnHeadingButton?.addEventListener("click", () => {
+    relearnAutoHeading();
+  });
+  autoMapCanvas?.addEventListener("click", (evt) => {
+    handleFallbackMapClick(evt);
+  });
+  autoWheelCanvas?.addEventListener("pointerdown", onAutoWheelPointerDown);
+  autoWheelCanvas?.addEventListener("pointermove", onAutoWheelPointerMove);
+  autoWheelCanvas?.addEventListener("pointerup", onAutoWheelPointerEnd);
+  autoWheelCanvas?.addEventListener("pointercancel", onAutoWheelPointerEnd);
+  autoWheelCanvas?.addEventListener("lostpointercapture", onAutoWheelPointerEnd);
+  autoWheelCanvas?.addEventListener("keydown", onAutoWheelKeyDown);
+  autoWheelCanvas?.addEventListener("keyup", onAutoWheelKeyUp);
+  updateAutoRouteActions();
 }
 
 function isAutoSurfaceVisible() {
@@ -239,7 +279,7 @@ function ensureAutoMap() {
     state.auto.routeLine = window.L.polyline([], { color: "#2a9d8f", weight: 5, opacity: 0.92 }).addTo(map);
     state.auto.trackLine = window.L.polyline([], { color: "#df7f3f", weight: 4, opacity: 0.78 }).addTo(map);
     map.on("click", (evt) => {
-      if (state.auto.addPinMode) addAutoWaypoint(evt.latlng.lat, evt.latlng.lng);
+      addAutoWaypoint(evt.latlng.lat, evt.latlng.lng);
     });
     map.on("dragstart zoomstart", () => {
       state.auto.userControllingMap = true;
@@ -293,40 +333,120 @@ function activateAutoFallback(reason) {
   drawAutoFallbackMap();
 }
 
-function setAddPinMode(enabled) {
-  state.auto.addPinMode = enabled;
-  autoAddPinButton?.setAttribute("aria-pressed", enabled ? "true" : "false");
-  updateAutoHint();
-}
-
 function updateAutoHint(extra = "") {
   const hint = $("#auto-map-hint");
   if (!hint) return;
-  const pin = state.auto.addPinMode ? "on" : "off";
-  const follow = state.auto.followBoat ? "follow" : "free";
-  hint.textContent = extra ? `${extra} | Add Pin: ${pin} | ${follow}` : `Add Pin: ${pin} | ${follow}`;
+  const label = hint.querySelector("span");
+  if (label) {
+    label.textContent = extra || "Tap the map to add a waypoint";
+  }
 }
 
 function addAutoWaypoint(lat, lon) {
+  pushAutoRouteUndo();
   const index = state.auto.waypoints.length;
   state.auto.waypoints.push({
     lat,
     lon,
     label: `WP ${index + 1}`,
   });
-  persistAutoWaypoints();
-  renderAutoRoute();
-  postAutoWaypoints();
+  state.auto.selectedWaypointIndex = index;
+  commitAutoRouteEdit("waypoint added");
 }
 
 function updateAutoWaypoint(index, lat, lon) {
   const waypoint = state.auto.waypoints[index];
   if (!waypoint) return;
+  pushAutoRouteUndo();
   waypoint.lat = lat;
   waypoint.lon = lon;
+  state.auto.selectedWaypointIndex = index;
+  commitAutoRouteEdit("waypoint moved");
+}
+
+function cloneAutoWaypoints() {
+  return state.auto.waypoints.map((point) => ({ ...point }));
+}
+
+function pushAutoRouteUndo() {
+  state.auto.undoStack.push(cloneAutoWaypoints());
+  if (state.auto.undoStack.length > 20) state.auto.undoStack.shift();
+  updateAutoRouteActions();
+}
+
+function normalizeAutoWaypointLabels() {
+  state.auto.waypoints.forEach((point, index) => {
+    point.label = `WP ${index + 1}`;
+  });
+}
+
+function commitAutoRouteEdit(message) {
+  normalizeAutoWaypointLabels();
   persistAutoWaypoints();
+  state.auto.waypointKey = "";
   renderAutoRoute();
   postAutoWaypoints();
+  updateAutoRouteActions();
+  updateAutoHint(message);
+}
+
+function undoAutoRouteEdit() {
+  const previous = state.auto.undoStack.pop();
+  if (!previous) return;
+  state.auto.waypoints = previous;
+  state.auto.selectedWaypointIndex = null;
+  commitAutoRouteEdit("last route edit undone");
+}
+
+function clearAutoRoute() {
+  $("#auto-clear-confirm")?.setAttribute("hidden", "");
+  if (!state.auto.waypoints.length) return;
+  pushAutoRouteUndo();
+  state.auto.waypoints = [];
+  state.auto.selectedWaypointIndex = null;
+  commitAutoRouteEdit("route cleared");
+}
+
+function deleteSelectedAutoWaypoint() {
+  const index = state.auto.selectedWaypointIndex;
+  if (!Number.isInteger(index) || !state.auto.waypoints[index]) return;
+  pushAutoRouteUndo();
+  state.auto.waypoints.splice(index, 1);
+  state.auto.selectedWaypointIndex = null;
+  commitAutoRouteEdit("waypoint deleted");
+}
+
+function selectAutoWaypoint(index) {
+  const valid = Number.isInteger(index) && Boolean(state.auto.waypoints[index]);
+  state.auto.selectedWaypointIndex = valid ? index : null;
+  state.auto.waypointKey = "";
+  renderAutoRoute();
+  updateAutoWaypointEditor();
+}
+
+function updateAutoWaypointEditor() {
+  const editor = $("#auto-waypoint-editor");
+  const index = state.auto.selectedWaypointIndex;
+  const waypoint = Number.isInteger(index) ? state.auto.waypoints[index] : null;
+  if (!editor || !waypoint) {
+    editor?.setAttribute("hidden", "");
+    return;
+  }
+  editor.removeAttribute("hidden");
+  text("#auto-selected-waypoint", waypoint.label || `WP ${index + 1}`);
+  text(
+    "#auto-selected-coordinates",
+    `${waypoint.lat.toFixed(6)}, ${waypoint.lon.toFixed(6)}`,
+  );
+}
+
+function updateAutoRouteActions() {
+  if (autoUndoRouteButton) {
+    autoUndoRouteButton.disabled = state.auto.undoStack.length === 0;
+  }
+  if (autoClearRouteButton) {
+    autoClearRouteButton.disabled = state.auto.waypoints.length === 0;
+  }
 }
 
 function postAutoWaypoints() {
@@ -339,13 +459,27 @@ function postAutoWaypoints() {
     .then(() => {
       state.control.serverReachable = true;
       text("#auto-status-reason", waypoints.length ? "route loaded" : "route cleared");
-      if (waypoints.length && state.control.surfaceMode === "auto" && state.control.mode !== "auto") {
-        requestModeChange("auto");
-      }
     })
     .catch((error) => {
       state.control.serverReachable = false;
       text("#auto-status-reason", `route failed: ${error.message}`);
+    });
+}
+
+function relearnAutoHeading() {
+  if (autoRelearnHeadingButton) autoRelearnHeadingButton.disabled = true;
+  text("#imu-relearn-status", "resetting learned heading...");
+  postJson("/api/control/relearn-heading", {})
+    .then(() => {
+      state.control.serverReachable = true;
+      text("#imu-relearn-status", "Heading reset. Switch to manual and drive straight.");
+    })
+    .catch((error) => {
+      state.control.serverReachable = false;
+      text("#imu-relearn-status", `Heading reset failed: ${error.message}`);
+    })
+    .finally(() => {
+      if (autoRelearnHeadingButton) autoRelearnHeadingButton.disabled = false;
     });
 }
 
@@ -385,8 +519,13 @@ function renderAutoRoute(activeIndex = null) {
     renderBoatMarker();
   }
   drawAutoFallbackMap(activeIndex);
-  text("#auto-route-count", `${state.auto.waypoints.length} WP`);
+  text(
+    "#auto-route-count",
+    `${state.auto.waypoints.length} waypoint${state.auto.waypoints.length === 1 ? "" : "s"}`,
+  );
   text("#auto-track-count", `${state.auto.actualTrack.length}`);
+  updateAutoWaypointEditor();
+  updateAutoRouteActions();
 }
 
 function renderWaypointMarkers(activeIndex = null) {
@@ -399,9 +538,10 @@ function renderWaypointMarkers(activeIndex = null) {
   state.auto.waypointMarkers.forEach((marker) => marker.remove());
   state.auto.waypointMarkers = state.auto.waypoints.map((point, index) => {
     const active = index === activeIndex;
+    const selected = index === state.auto.selectedWaypointIndex;
     const icon = window.L.divIcon({
       className: "",
-      html: `<div class="waypoint-pin${active ? " active" : ""}"><span>${index + 1}</span></div>`,
+      html: `<div class="waypoint-pin${active ? " active" : ""}${selected ? " selected" : ""}"><span>${index + 1}</span></div>`,
       iconSize: [30, 30],
       iconAnchor: [15, 28],
     });
@@ -410,9 +550,9 @@ function renderWaypointMarkers(activeIndex = null) {
       const latlng = marker.getLatLng();
       updateAutoWaypoint(index, latlng.lat, latlng.lng);
     });
-    marker.on("click", () => {
-      setAddPinMode(false);
-      text("#auto-status-reason", `${point.label || `WP ${index + 1}`} selected`);
+    marker.on("click", (evt) => {
+      window.L.DomEvent.stopPropagation(evt);
+      selectAutoWaypoint(index);
     });
     return marker;
   });
@@ -505,6 +645,39 @@ function fallbackPointToLatLon(evt) {
   };
 }
 
+function handleFallbackMapClick(evt) {
+  const surface = canvasContext("auto-map-fallback");
+  if (!surface) return;
+  const rect = autoMapCanvas.getBoundingClientRect();
+  const bounds = state.auto.fallbackBounds || fallbackBounds();
+  const click = {
+    x: ((evt.clientX - rect.left) / rect.width) * surface.w,
+    y: ((evt.clientY - rect.top) / rect.height) * surface.h,
+  };
+  let nearest = null;
+  state.auto.waypoints.forEach((point, index) => {
+    const projected = projectFallback(
+      point,
+      bounds,
+      surface.w,
+      surface.h,
+    );
+    const distance = Math.hypot(
+      projected.x - click.x,
+      projected.y - click.y,
+    );
+    if (distance <= 24 && (!nearest || distance < nearest.distance)) {
+      nearest = { index, distance };
+    }
+  });
+  if (nearest) {
+    selectAutoWaypoint(nearest.index);
+    return;
+  }
+  const latlon = fallbackPointToLatLon(evt);
+  if (latlon) addAutoWaypoint(latlon.lat, latlon.lon);
+}
+
 function drawAutoFallbackMap(activeIndex = null) {
   if (autoMapFrame?.dataset.fallback !== "true") return;
   const surface = canvasContext("auto-map-fallback");
@@ -523,14 +696,28 @@ function drawAutoFallbackMap(activeIndex = null) {
 
   state.auto.waypoints.forEach((point, index) => {
     const p = projectFallback(point, bounds, w, h);
-    ctx.fillStyle = index === activeIndex ? colors.red : colors.yellow;
+    ctx.fillStyle =
+      index === state.auto.selectedWaypointIndex
+        ? colors.teal
+        : index === activeIndex
+          ? colors.red
+          : colors.yellow;
     ctx.strokeStyle = colors.ink;
     ctx.lineWidth = 3;
     ctx.beginPath();
     ctx.arc(p.x, p.y, 14, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
-    drawLabel(ctx, `${index + 1}`, p.x - 4, p.y + 5, index === activeIndex ? "#fffdf4" : colors.ink, 13);
+    drawLabel(
+      ctx,
+      `${index + 1}`,
+      p.x - 4,
+      p.y + 5,
+      index === activeIndex || index === state.auto.selectedWaypointIndex
+        ? "#fffdf4"
+        : colors.ink,
+      13,
+    );
   });
 
   if (state.auto.boatPosition) {
@@ -653,6 +840,149 @@ function animateWheelTo(target) {
   requestAnimationFrame(step);
 }
 
+function autoSteeringEnabled() {
+  return (
+    state.control.mode === "auto"
+    && state.control.serverReachable
+  );
+}
+
+function onAutoWheelPointerDown(evt) {
+  if (!autoSteeringEnabled()) {
+    text("#auto-wheel-hint", "Arm Auto before taking steering.");
+    return;
+  }
+  evt.preventDefault();
+  autoWheelCanvas.setPointerCapture(evt.pointerId);
+  state.auto.takeoverPointer = evt.pointerId;
+  state.auto.takeoverActive = true;
+  state.auto.takeoverValue = state.auto.effectiveSteering;
+  state.auto.takeoverLastPointerAngleDeg = pointerAngleDeg(
+    autoWheelCanvas,
+    evt,
+  );
+  renderAutoAuthority();
+  sendAutoSteeringTakeover(true);
+  drawAutoMiniWheel();
+}
+
+function onAutoWheelPointerMove(evt) {
+  if (state.auto.takeoverPointer !== evt.pointerId) return;
+  evt.preventDefault();
+  const angle = pointerAngleDeg(autoWheelCanvas, evt);
+  let delta = angle - state.auto.takeoverLastPointerAngleDeg;
+  if (delta > 180) delta -= 360;
+  if (delta < -180) delta += 360;
+  state.auto.takeoverLastPointerAngleDeg = angle;
+  setAutoTakeoverValue(
+    state.auto.takeoverValue + delta / state.auto.wheelMaxDeg,
+  );
+}
+
+function onAutoWheelPointerEnd(evt) {
+  if (state.auto.takeoverPointer !== evt.pointerId) return;
+  try {
+    autoWheelCanvas.releasePointerCapture(evt.pointerId);
+  } catch (_) {}
+  state.auto.takeoverPointer = null;
+  releaseAutoSteeringTakeover();
+}
+
+function onAutoWheelKeyDown(evt) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "0"].includes(evt.key)) {
+    return;
+  }
+  if (!autoSteeringEnabled()) return;
+  evt.preventDefault();
+  if (!state.auto.takeoverActive) {
+    state.auto.takeoverActive = true;
+    state.auto.takeoverValue = state.auto.effectiveSteering;
+  }
+  const step = evt.shiftKey ? 0.2 : 0.08;
+  if (evt.key === "ArrowLeft") {
+    setAutoTakeoverValue(state.auto.takeoverValue - step);
+  } else if (evt.key === "ArrowRight") {
+    setAutoTakeoverValue(state.auto.takeoverValue + step);
+  } else {
+    setAutoTakeoverValue(0);
+  }
+}
+
+function onAutoWheelKeyUp(evt) {
+  if (["ArrowLeft", "ArrowRight", "Home", "0"].includes(evt.key)) {
+    releaseAutoSteeringTakeover();
+  }
+}
+
+function setAutoTakeoverValue(value) {
+  state.auto.takeoverValue = clamp(value, -1, 1);
+  autoWheelCanvas?.setAttribute(
+    "aria-valuenow",
+    state.auto.takeoverValue.toFixed(2),
+  );
+  renderAutoAuthority();
+  sendAutoSteeringTakeover(false);
+  requestAnimationFrame(drawAutoMiniWheel);
+}
+
+function releaseAutoSteeringTakeover() {
+  const wasActive = state.auto.takeoverActive;
+  state.auto.takeoverActive = false;
+  state.auto.takeoverPointer = null;
+  state.auto.takeoverValue = 0;
+  renderAutoAuthority();
+  requestAnimationFrame(drawAutoMiniWheel);
+  if (!wasActive) return;
+  postJson("/api/control/steering-takeover", {
+    active: false,
+    steering: 0,
+  }).catch(() => {
+    state.control.serverReachable = false;
+  });
+}
+
+function sendAutoSteeringTakeover(force = false) {
+  if (!state.auto.takeoverActive || state.control.mode !== "auto") return;
+  const now = performance.now();
+  if (!force && now - state.auto.takeoverLastSentAt < 45) return;
+  state.auto.takeoverLastSentAt = now;
+  postJson("/api/control/steering-takeover", {
+    active: true,
+    steering: state.auto.takeoverValue,
+  })
+    .then(() => {
+      state.control.serverReachable = true;
+    })
+    .catch((error) => {
+      state.control.serverReachable = false;
+      text("#auto-wheel-hint", `Steering unavailable: ${error.message}`);
+      releaseAutoSteeringTakeover();
+    });
+}
+
+function renderAutoAuthority() {
+  const active = state.auto.takeoverActive || state.auto.takeoverReported;
+  const authority = $("#auto-authority-state");
+  const panel = $(".mission-output");
+  if (authority) {
+    authority.dataset.authority = active ? "operator" : "auto";
+    authority.textContent = active
+      ? "Operator steering"
+      : "Autopilot steering";
+  }
+  panel?.setAttribute(
+    "data-authority",
+    active ? "operator" : "auto",
+  );
+  text("#auto-steering-label", active ? "Operator" : "Autopilot");
+  text(
+    "#auto-wheel-hint",
+    active
+      ? "You have steering. Auto still controls throttle."
+      : "Hold the wheel to take steering. Release to return it.",
+  );
+}
+
 function throttleFromPointer(canvas, evt) {
   const rect = canvas.getBoundingClientRect();
   const padding = 14;
@@ -734,6 +1064,9 @@ function requestModeChange(mode) {
   if (mode !== "manual") {
     resetIntent();
     releaseManualPointers();
+  }
+  if (mode !== "auto") {
+    releaseAutoSteeringTakeover();
   }
   state.control.surfaceMode = mode;
   state.control.pendingMode = mode;
@@ -919,10 +1252,28 @@ function signed(value) {
 function manualMix(throttle, steering) {
   const t = clamp(throttle, 0, 1);
   const s = clamp(steering, -1, 1);
-  return {
-    left: clamp(t * (1 + s), 0, 1),
-    right: clamp(t * (1 - s), 0, 1),
-  };
+  const magnitude = Math.abs(s);
+  const pivotStart = clamp(
+    state.control.limits.pivot_turn_start,
+    0,
+    0.99,
+  );
+  const reverseRatio = clamp(
+    state.control.limits.pivot_reverse_ratio,
+    0,
+    1,
+  );
+  const outer = clamp(t * (1 + magnitude), 0, 1);
+  let inner = t * (1 - magnitude);
+  if (reverseRatio > 0 && magnitude > pivotStart) {
+    const blend = (magnitude - pivotStart) / (1 - pivotStart);
+    const innerAtStart = t * (1 - pivotStart);
+    const innerAtFull = -t * reverseRatio;
+    inner = innerAtStart * (1 - blend) + innerAtFull * blend;
+  }
+  return s >= 0
+    ? { left: outer, right: inner }
+    : { left: inner, right: outer };
 }
 
 function renderLocalManualIntent() {
@@ -989,6 +1340,7 @@ function sendManualCommand(force = false) {
 }
 
 function stopManualCommand() {
+  releaseAutoSteeringTakeover();
   state.control.surfaceMode = "off";
   state.control.mode = "off";
   state.control.pendingMode = "off";
@@ -1184,6 +1536,8 @@ function updateDom(data) {
     state.control.limits = {
       manual_slew_per_s: num(manual.limits.manual_slew_per_s) ?? state.control.limits.manual_slew_per_s,
       stale_after_s: num(manual.limits.stale_after_s) ?? state.control.limits.stale_after_s,
+      pivot_turn_start: num(manual.limits.pivot_turn_start) ?? state.control.limits.pivot_turn_start,
+      pivot_reverse_ratio: num(manual.limits.pivot_reverse_ratio) ?? state.control.limits.pivot_reverse_ratio,
     };
   }
   if (manual.mode && state.control.pendingMode) {
@@ -1294,13 +1648,25 @@ function updateActuatorBanner(manual) {
 function updateAutoMission(data, control, health) {
   const status = control?.auto_status || {};
   const output = control?.effective || {};
+  const autoOutput = status?.output || {};
   const activeIndex = Number.isInteger(status.active_index) ? status.active_index : null;
   const leftUs = num(output.left_us) ?? state.auto.neutralUs;
   const rightUs = num(output.right_us) ?? state.auto.neutralUs;
+  const autoLeftUs = num(autoOutput.left_us) ?? leftUs;
+  const autoRightUs = num(autoOutput.right_us) ?? rightUs;
   const action = status?.control?.display_action || status?.control?.action || status.state || control?.mode || "off";
   const reason = status.reason || control?.reason || "waiting for auto command";
+  const heading = status?.heading || {};
   const actuator = typeof control?.actuator === "string" ? control.actuator : "";
   const actuatorHealth = actuator.includes("live") ? "live" : actuator.includes("error") ? "error" : "waiting";
+  state.auto.effectiveSteering =
+    num(output.steering) ?? steeringFromPwm(leftUs, rightUs);
+  state.auto.autoDesiredSteering =
+    num(autoOutput.steering)
+    ?? steeringFromPwm(autoLeftUs, autoRightUs);
+  state.auto.takeoverReported = Boolean(
+    output?.steering_takeover?.active,
+  );
 
   setLabeledHealth("#auto-health-gnss", "GNSS", health.gnssHealth);
   setLabeledHealth("#auto-health-imu", "IMU", health.imuHealth);
@@ -1309,15 +1675,27 @@ function updateAutoMission(data, control, health) {
   text("#auto-status-reason", reason);
   text("#auto-active-wp", activeIndex === null || !status.total ? "--" : `${activeIndex + 1}/${status.total}`);
   text("#auto-distance", fmt(status.distance_m, 1, " m"));
+  text(
+    "#auto-heading-state",
+    heading.state
+      ? `${String(heading.state).replaceAll("_", " ")}${num(heading.heading_deg) === null ? "" : ` ${fmt(heading.heading_deg, 0, " deg")}`}`
+      : "--",
+  );
   text("#auto-heading-error", fmtSigned(status.heading_error_deg, 1, " deg"));
   text("#auto-output-action", String(action).replaceAll("_", " "));
   text("#auto-output-reason", reason);
   text("#auto-left-pwm", fmtInt(leftUs));
   text("#auto-right-pwm", fmtInt(rightUs));
-  text("#auto-drive-percent", `${Math.round(autoDrivePercent(leftUs, rightUs))}%`);
+  const effectiveThrottle = num(output.throttle);
+  const drivePercent =
+    effectiveThrottle === null
+      ? autoDrivePercent(leftUs, rightUs)
+      : clamp(effectiveThrottle, 0, 1) * 100;
+  text("#auto-drive-percent", `${Math.round(drivePercent)}%`);
 
   renderAutoRoute(activeIndex);
-  drawAutoMiniWheel(leftUs, rightUs, action);
+  renderAutoAuthority();
+  drawAutoMiniWheel();
 }
 
 function fmtSigned(value, digits = 1, suffix = "") {
@@ -1334,51 +1712,135 @@ function setLabeledHealth(selector, label, health) {
 }
 
 function autoDrivePercent(leftUs, rightUs) {
-  const span = Math.max(1, state.auto.fullUs - state.auto.neutralUs);
-  const left = Math.max(0, leftUs - state.auto.neutralUs) / span;
-  const right = Math.max(0, rightUs - state.auto.neutralUs) / span;
+  const left = Math.abs(thrusterDemandFromPwm(leftUs));
+  const right = Math.abs(thrusterDemandFromPwm(rightUs));
   return clamp(((left + right) / 2) * 100, 0, 100);
 }
 
-function drawAutoMiniWheel(leftUs, rightUs, action) {
+function steeringFromPwm(leftUs, rightUs) {
+  const left = thrusterDemandFromPwm(leftUs);
+  const right = thrusterDemandFromPwm(rightUs);
+  const totalEffort = Math.abs(left) + Math.abs(right);
+  if (totalEffort < 0.02) return 0;
+  return clamp((left - right) / totalEffort, -1, 1);
+}
+
+function thrusterDemandFromPwm(pwmUs) {
+  const pwm = num(pwmUs) ?? state.auto.neutralUs;
+  if (pwm >= state.auto.neutralUs) {
+    const span = Math.max(
+      1,
+      state.auto.fullUs - state.auto.neutralUs,
+    );
+    return clamp((pwm - state.auto.neutralUs) / span, 0, 1);
+  }
+  const span = Math.max(
+    1,
+    state.auto.neutralUs - state.auto.reverseFullUs,
+  );
+  return -clamp((state.auto.neutralUs - pwm) / span, 0, 1);
+}
+
+function drawAutoMiniWheel() {
   const surface = canvasContext("auto-mini-wheel");
   if (!surface) return;
   const { ctx, w, h } = surface;
   const cx = w / 2;
   const cy = h / 2;
-  const r = Math.min(w, h) / 2 - 13;
-  const span = Math.max(1, state.auto.fullUs - state.auto.neutralUs);
-  const steering = clamp((leftUs - rightUs) / span, -1, 1);
-  const drive = clamp(((leftUs + rightUs) / 2 - state.auto.neutralUs) / span, 0, 1);
+  const r = Math.min(w, h) / 2 - 24;
+  const finalSteering = state.auto.takeoverActive
+    ? state.auto.takeoverValue
+    : state.auto.effectiveSteering;
+  const finalAngleDeg = finalSteering * state.auto.wheelMaxDeg;
+  const finalAngleRad = (finalAngleDeg * Math.PI) / 180;
+  const autoAngleRad =
+    (state.auto.autoDesiredSteering * state.auto.wheelMaxDeg * Math.PI)
+    / 180;
+  const enabled = autoSteeringEnabled();
 
-  clearCanvas(ctx, w, h, "#fff7df");
-  ctx.strokeStyle = colors.line;
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.arc(cx, cy, r, 0, Math.PI * 2);
-  ctx.stroke();
+  clearCanvas(ctx, w, h, colors.bg);
 
   ctx.save();
   ctx.translate(cx, cy);
-  ctx.rotate(steering * 0.85);
-  ctx.lineWidth = 8;
-  ctx.lineCap = "round";
-  ctx.strokeStyle = drive > 0 ? colors.ink : colors.dead;
+  ctx.rotate(finalAngleRad);
+
+  ctx.lineWidth = Math.max(10, r * 0.13);
+  ctx.strokeStyle = enabled ? colors.ink : colors.dead;
   ctx.beginPath();
-  ctx.moveTo(-r * 0.66, 0);
-  ctx.lineTo(r * 0.66, 0);
-  ctx.moveTo(0, -r * 0.66);
-  ctx.lineTo(0, r * 0.66);
+  ctx.arc(0, 0, r - ctx.lineWidth / 2, 0, Math.PI * 2);
   ctx.stroke();
-  ctx.fillStyle = drive > 0 ? colors.yellow : "#e5d9b5";
+
+  ctx.fillStyle = state.auto.takeoverActive
+    ? colors.orange
+    : enabled
+      ? colors.yellow
+      : "#e5d9b5";
   ctx.beginPath();
-  ctx.arc(0, 0, r * 0.24, 0, Math.PI * 2);
+  ctx.arc(0, 0, r * 0.32, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.lineWidth = Math.max(8, r * 0.085);
+  ctx.lineCap = "round";
+  ctx.strokeStyle = enabled ? colors.ink : colors.dead;
+  for (let i = 0; i < 3; i += 1) {
+    const spoke = (i * Math.PI * 2) / 3 - Math.PI / 2;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(
+      Math.cos(spoke) * (r - 14),
+      Math.sin(spoke) * (r - 14),
+    );
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = enabled ? colors.red : "#c89aa1";
+  const indicatorWidth = r * 0.16;
+  const indicatorHeight = r * 0.34;
+  roundedRect(
+    ctx,
+    -indicatorWidth / 2,
+    -r + 4,
+    indicatorWidth,
+    indicatorHeight,
+    indicatorWidth / 3,
+  );
+  ctx.fill();
+
+  ctx.fillStyle = enabled ? colors.ink : colors.dead;
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 0.12, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 
-  ctx.fillStyle = colors.teal;
-  ctx.fillRect(12, h - 17, Math.max(0, w - 24) * drive, 6);
-  drawLabel(ctx, String(action || "off").replaceAll("_", " ").toUpperCase(), 12, 18, colors.muted, 10);
+  // Auto's requested steering remains visible as a small teal index outside
+  // the wheel while the red wheel index shows the final command.
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(autoAngleRad);
+  ctx.strokeStyle = colors.teal;
+  ctx.lineWidth = 5;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(0, -r + 1);
+  ctx.lineTo(0, -r - 7);
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.strokeStyle = colors.dead;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(cx - 6, cy + r + 2);
+  ctx.lineTo(cx + 6, cy + r + 2);
+  ctx.stroke();
+
+  drawLabel(
+    ctx,
+    `${finalAngleDeg >= 0 ? "+" : ""}${finalAngleDeg.toFixed(0)}°`,
+    cx - 22,
+    cy + r + 20,
+    colors.muted,
+    12,
+  );
 }
 
 function setZone(selector, value) {
@@ -1901,10 +2363,9 @@ function drawAll(data) {
   drawThrottle();
   if (!data) return;
   const control = data?.control || {};
-  const output = control?.effective || {};
   const status = control?.auto_status || {};
   drawAutoFallbackMap(Number.isInteger(status.active_index) ? status.active_index : null);
-  drawAutoMiniWheel(num(output.left_us) ?? state.auto.neutralUs, num(output.right_us) ?? state.auto.neutralUs, status?.control?.action || status.state || "off");
+  drawAutoMiniWheel();
   drawRadar("radar-overview", data, false);
   drawRadar("radar-detail", data, true);
   drawPosition("position-overview", data, true);
@@ -1976,6 +2437,7 @@ fetch("/api/snapshot")
 bindManualControls();
 syncModePills();
 setInterval(() => sendManualCommand(false), 50);
+setInterval(() => sendAutoSteeringTakeover(false), 50);
 setInterval(watchdogTick, 500);
 window.addEventListener("resize", () => {
   drawWheel();

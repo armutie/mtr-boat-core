@@ -55,7 +55,7 @@ class ControlSupervisor:
 
     Manual input is converted from velocity intent to PWM here. Autonomous
     input is already an actuator command and passes through unchanged unless
-    the operator is actively applying a trim.
+    the operator is actively holding steering authority.
     """
 
     def __init__(
@@ -64,21 +64,31 @@ class ControlSupervisor:
         max_linear_mps: float = 1.0,
         max_angular_rps: float = 1.0,
         throttle_slew_per_s: float = 0.0,
+        direction_change_neutral_s: float = 0.2,
         mapping: ThrusterMapping | None = None,
     ) -> None:
         self.command_timeout_s = max(0.05, command_timeout_s)
         self.max_linear_mps = max(0.01, max_linear_mps)
         self.max_angular_rps = max(0.01, max_angular_rps)
         self.throttle_slew_per_s = max(0.0, throttle_slew_per_s)
+        self.direction_change_neutral_s = max(
+            0.0,
+            direction_change_neutral_s,
+        )
         self.mapping = mapping or ThrusterMapping()
         self.mode = "off"
         self._operator = VelocityCommand()
         self._automatic = self._neutral()
         self._operator_at: float | None = None
         self._automatic_at: float | None = None
+        self._steering_takeover_active = False
+        self._steering_takeover = 0.0
+        self._steering_takeover_at: float | None = None
         self._manual_throttle = 0.0
         self._last_output_at: float | None = None
         self._actuator_session: str | None = None
+        self._directions = [0, 0]
+        self._neutral_since: list[float | None] = [None, None]
 
     def set_mode(self, mode: str) -> None:
         if mode not in VALID_CONTROL_MODES:
@@ -86,6 +96,8 @@ class ControlSupervisor:
         if mode != self.mode:
             self._operator_at = None
             self._automatic_at = None
+            self._steering_takeover_active = False
+            self._steering_takeover_at = None
             self._manual_throttle = 0.0
             self._last_output_at = None
         self.mode = mode
@@ -112,27 +124,37 @@ class ControlSupervisor:
         )
         self._automatic_at = now
 
+    def update_steering_takeover(
+        self,
+        active: bool,
+        steering: float,
+        now: float,
+    ) -> None:
+        self._steering_takeover_active = bool(active)
+        self._steering_takeover = clamp(steering, -1.0, 1.0)
+        self._steering_takeover_at = now
+
     def output(self, now: float) -> PwmCommand:
         if self.mode == "manual":
             if not self._fresh(self._operator_at, now):
                 self._manual_throttle = 0.0
                 self._last_output_at = now
-                return self._neutral()
-            return self._manual_output(now)
-
-        if self.mode == "auto":
+                desired = self._neutral()
+            else:
+                desired = self._manual_output(now)
+        elif self.mode == "auto":
             if not self._fresh(self._automatic_at, now):
-                return self._neutral()
-            if not self._fresh(self._operator_at, now):
-                return self._automatic
-            if (
-                abs(self._operator.linear_x) <= 1e-9
-                and abs(self._operator.angular_z) <= 1e-9
+                desired = self._neutral()
+            elif (
+                not self._steering_takeover_active
+                or not self._fresh(self._steering_takeover_at, now)
             ):
-                return self._automatic
-            return self._trimmed_auto_output()
-
-        return self._neutral()
+                desired = self._automatic
+            else:
+                desired = self._steering_takeover_output()
+        else:
+            desired = self._neutral()
+        return self._guard_direction_change(desired, now)
 
     def _manual_output(self, now: float) -> PwmCommand:
         target_throttle = clamp(
@@ -168,17 +190,15 @@ class ControlSupervisor:
         )
         return PwmCommand(pair.left_us, pair.right_us)
 
-    def _trimmed_auto_output(self) -> PwmCommand:
-        throttle, steering = pair_to_manual(
+    def _steering_takeover_output(self) -> PwmCommand:
+        throttle, _auto_steering = pair_to_manual(
             self._automatic.left_us,
             self._automatic.right_us,
             self.mapping,
         )
-        throttle += self._operator.linear_x / self.max_linear_mps
-        steering += self._operator.angular_z / self.max_angular_rps
         pair = manual_to_pair(
             clamp(throttle, 0.0, 1.0),
-            clamp(steering, -1.0, 1.0),
+            self._steering_takeover,
             self.mapping,
         )
         return PwmCommand(pair.left_us, pair.right_us)
@@ -188,6 +208,58 @@ class ControlSupervisor:
             self.mapping.neutral_us,
             self.mapping.neutral_us,
         )
+
+    def _guard_direction_change(
+        self,
+        command: PwmCommand,
+        now: float,
+    ) -> PwmCommand:
+        values = (command.left_us, command.right_us)
+        guarded = [
+            self._guard_channel(index, value, now)
+            for index, value in enumerate(values)
+        ]
+        return PwmCommand(guarded[0], guarded[1])
+
+    def _guard_channel(
+        self,
+        index: int,
+        requested_us: int,
+        now: float,
+    ) -> int:
+        neutral = self.mapping.neutral_us
+        requested_direction = (
+            1
+            if requested_us > neutral
+            else -1
+            if requested_us < neutral
+            else 0
+        )
+        previous_direction = self._directions[index]
+
+        if requested_direction == 0:
+            if (
+                previous_direction != 0
+                and self._neutral_since[index] is None
+            ):
+                self._neutral_since[index] = now
+            return neutral
+
+        if previous_direction in (0, requested_direction):
+            self._directions[index] = requested_direction
+            self._neutral_since[index] = None
+            return requested_us
+
+        neutral_since = self._neutral_since[index]
+        if neutral_since is None:
+            self._neutral_since[index] = now
+            return neutral
+        if now - neutral_since < self.direction_change_neutral_s:
+            return neutral
+
+        self._directions[index] = requested_direction
+        self._neutral_since[index] = None
+        return requested_us
 
     def _fresh(self, updated_at: float | None, now: float) -> bool:
         return (

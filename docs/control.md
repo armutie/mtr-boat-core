@@ -11,8 +11,8 @@ dashboard -> autonomy/route -> autonomy -> thrusters/auto -> supervisor
 
 The supervisor supports `off`, `manual`, and `auto`. Manual velocity intent is
 mapped to PWM once. Autonomy publishes the exact left/right PWM it calculates,
-so its commands are not converted to velocity and back. In auto mode, a fresh
-operator command can still be applied as a temporary correction.
+so its commands are not converted to velocity and back. In Auto, holding the
+dashboard wheel temporarily replaces Auto steering while Auto retains throttle.
 
 ## Start
 
@@ -49,6 +49,24 @@ Inspect it with:
 ```bash
 ros2 topic echo /thrusters/status
 ```
+
+## Calibrated pivot turns
+
+The measured PWM levels are:
+
+| Level | Forward | Reverse |
+| --- | ---: | ---: |
+| 1 | 1565 | 1460 |
+| 2 | 1575 | 1445 |
+| 3 | 1650 | 1425 |
+
+Ordinary steering remains forward differential steering. Above 75% steering
+lock, the inside thruster blends through neutral into reverse while the outside
+thruster increases. Zero throttle always produces `L1500 R1500`. Crossing an
+individual channel between forward and reverse holds it at neutral for 0.2 s.
+
+Auto uses the full measured reverse level only for its latched behind-target
+turn; ordinary heading corrections remain forward-only.
 
 Use `web_dashboard --direct-control` only for an isolated legacy bench test,
 never alongside `thruster_node`.

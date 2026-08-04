@@ -42,6 +42,37 @@ class ControlSupervisorTests(unittest.TestCase):
             PwmCommand(1500, 1500),
         )
 
+    def test_sharp_manual_turn_reverses_inside_thruster(self) -> None:
+        self.control.set_mode("manual")
+        self.control.update_operator(VelocityCommand(1.0, 1.0), 10.0)
+
+        self.assertEqual(
+            self.control.output(10.0),
+            PwmCommand(1650, 1445),
+        )
+
+    def test_direction_change_holds_neutral_before_reverse(self) -> None:
+        self.control.set_mode("manual")
+        self.control.update_operator(VelocityCommand(2.0, 0.0), 10.0)
+        self.assertEqual(
+            self.control.output(10.0),
+            PwmCommand(1650, 1650),
+        )
+
+        self.control.update_operator(VelocityCommand(2.0, 1.0), 10.1)
+        self.assertEqual(
+            self.control.output(10.1),
+            PwmCommand(1650, 1500),
+        )
+        self.assertEqual(
+            self.control.output(10.2),
+            PwmCommand(1650, 1500),
+        )
+        self.assertEqual(
+            self.control.output(10.31),
+            PwmCommand(1650, 1425),
+        )
+
     def test_auto_pwm_passes_through_exactly(self) -> None:
         self.control.set_mode("auto")
         self.control.update_auto(PwmCommand(1565, 1575), 10.0)
@@ -61,20 +92,51 @@ class ControlSupervisorTests(unittest.TestCase):
             PwmCommand(1565, 1565),
         )
 
-    def test_fresh_operator_input_trims_auto(self) -> None:
+    def test_active_takeover_replaces_auto_steering(self) -> None:
         self.control.set_mode("auto")
         self.control.update_auto(PwmCommand(1600, 1600), 10.0)
-        self.control.update_operator(VelocityCommand(-0.25, 0.4), 10.1)
+        self.control.update_steering_takeover(True, 0.4, 10.1)
 
         self.assertEqual(
             self.control.output(10.2),
-            PwmCommand(1599, 1580),
+            PwmCommand(1614, 1586),
         )
 
-    def test_auto_continues_when_operator_trim_expires(self) -> None:
+    def test_centered_takeover_overrides_auto_turn(self) -> None:
         self.control.set_mode("auto")
         self.control.update_auto(PwmCommand(1600, 1575), 10.0)
-        self.control.update_operator(VelocityCommand(-0.25, 0.4), 9.6)
+        self.control.update_steering_takeover(True, 0.0, 10.1)
+
+        self.assertEqual(
+            self.control.output(10.2),
+            PwmCommand(1588, 1588),
+        )
+
+    def test_auto_continues_when_steering_takeover_expires(self) -> None:
+        self.control.set_mode("auto")
+        self.control.update_auto(PwmCommand(1600, 1575), 10.0)
+        self.control.update_steering_takeover(True, 0.4, 9.6)
+
+        self.assertEqual(
+            self.control.output(10.2),
+            PwmCommand(1600, 1575),
+        )
+
+    def test_releasing_takeover_returns_to_auto_immediately(self) -> None:
+        self.control.set_mode("auto")
+        self.control.update_auto(PwmCommand(1600, 1575), 10.0)
+        self.control.update_steering_takeover(True, -0.7, 10.1)
+        self.control.update_steering_takeover(False, 0.0, 10.2)
+
+        self.assertEqual(
+            self.control.output(10.2),
+            PwmCommand(1600, 1575),
+        )
+
+    def test_manual_operator_command_cannot_fight_auto(self) -> None:
+        self.control.set_mode("auto")
+        self.control.update_auto(PwmCommand(1600, 1575), 10.0)
+        self.control.update_operator(VelocityCommand(2.0, -1.0), 10.1)
 
         self.assertEqual(
             self.control.output(10.2),

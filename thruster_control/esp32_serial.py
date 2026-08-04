@@ -48,32 +48,68 @@ class ThrusterMapping:
     neutral_us: int = 1500
     forward_min_us: int = 1520
     forward_max_us: int = 1600
+    reverse_level1_us: int = 1460
+    reverse_level2_us: int = 1445
+    reverse_level3_us: int = 1425
     hard_min_us: int = 1350
     hard_max_us: int = 2000
     steering_slowdown: float = 0.35
+    pivot_turn_start: float = 0.75
+    pivot_reverse_ratio: float = 1.0
 
     def clamp_pwm(self, value: float) -> int:
         return int(round(max(self.hard_min_us, min(self.hard_max_us, value))))
 
     def throttle_to_us(self, throttle: float) -> int:
-        """Map a 0..1 forward throttle into microseconds via the forward band.
+        """Map signed thrust into the measured forward/reverse PWM bands.
 
-        Anything at or below ~1% throttle returns neutral so the ESC does not
-        sit just above stall.
+        Anything within ~1% of zero returns neutral. Reverse uses the three
+        measured levels so half reverse lands on level 2 exactly.
         """
 
-        throttle = max(0.0, min(1.0, throttle))
-        if throttle <= 0.01:
+        throttle = max(-1.0, min(1.0, throttle))
+        if abs(throttle) <= 0.01:
             return self.neutral_us
-        pwm = self.forward_min_us + throttle * (self.forward_max_us - self.forward_min_us)
+        if throttle > 0.0:
+            pwm = self.forward_min_us + throttle * (
+                self.forward_max_us - self.forward_min_us
+            )
+            return self.clamp_pwm(pwm)
+
+        reverse = abs(throttle)
+        if reverse <= 0.5:
+            pwm = self.reverse_level1_us + reverse * 2.0 * (
+                self.reverse_level2_us - self.reverse_level1_us
+            )
+        else:
+            pwm = self.reverse_level2_us + (reverse - 0.5) * 2.0 * (
+                self.reverse_level3_us - self.reverse_level2_us
+            )
         return self.clamp_pwm(pwm)
 
     def pwm_to_throttle(self, pwm_us: float) -> float:
-        if pwm_us <= self.neutral_us:
+        value = float(pwm_us)
+        if value == self.neutral_us:
             return 0.0
-        span = max(1, self.forward_max_us - self.forward_min_us)
-        throttle = (float(pwm_us) - self.forward_min_us) / span
-        return max(0.02, min(1.0, throttle))
+        if value > self.neutral_us:
+            span = max(1, self.forward_max_us - self.forward_min_us)
+            throttle = (value - self.forward_min_us) / span
+            return max(0.02, min(1.0, throttle))
+        if value >= self.reverse_level1_us:
+            return -0.02
+        if value >= self.reverse_level2_us:
+            span = max(
+                1,
+                self.reverse_level1_us - self.reverse_level2_us,
+            )
+            ratio = (self.reverse_level1_us - value) / span
+            return -(0.02 + ratio * 0.48)
+        span = max(
+            1,
+            self.reverse_level2_us - self.reverse_level3_us,
+        )
+        ratio = (self.reverse_level2_us - value) / span
+        return -max(0.5, min(1.0, 0.5 + ratio * 0.5))
 
 
 def nav_output_to_thruster(output: NavOutput | None, mapping: ThrusterMapping | None = None) -> ThrusterCommand:
@@ -100,12 +136,13 @@ def manual_to_pair(
     steering: float,
     mapping: ThrusterMapping | None = None,
     enabled: bool = True,
+    allow_pivot_reverse: bool = True,
 ) -> ThrusterPairCommand:
     """Convert a (throttle, steering) intent into a left/right PWM pair.
 
-    Differential math: ``left = throttle * (1 + steering)``,
-    ``right = throttle * (1 - steering)``, both clamped to [0, 1] and then
-    mapped through the same forward microsecond band.
+    Ordinary steering uses the forward differential mix. Near full lock, the
+    inside thruster blends through neutral into calibrated reverse. Reverse is
+    multiplied by throttle, so zero throttle always means two neutral outputs.
 
     When ``enabled`` is False, both sides are neutral regardless of input.
     """
@@ -124,8 +161,31 @@ def manual_to_pair(
             f"throttle={throttle:.2f} steering={steering:+.2f} (neutral)",
         )
 
-    left = max(0.0, min(1.0, throttle * (1.0 + steering)))
-    right = max(0.0, min(1.0, throttle * (1.0 - steering)))
+    steering_magnitude = abs(steering)
+    outer = min(1.0, throttle * (1.0 + steering_magnitude))
+    inner = throttle * (1.0 - steering_magnitude)
+    pivot_start = max(0.0, min(0.99, mapping.pivot_turn_start))
+    reverse_ratio = (
+        max(0.0, min(1.0, mapping.pivot_reverse_ratio))
+        if allow_pivot_reverse
+        else 0.0
+    )
+    if reverse_ratio > 0.0 and steering_magnitude > pivot_start:
+        blend = (
+            (steering_magnitude - pivot_start)
+            / (1.0 - pivot_start)
+        )
+        inner_at_start = throttle * (1.0 - pivot_start)
+        inner_at_full = -throttle * reverse_ratio
+        inner = (
+            inner_at_start * (1.0 - blend)
+            + inner_at_full * blend
+        )
+
+    if steering >= 0.0:
+        left, right = outer, inner
+    else:
+        left, right = inner, outer
     return ThrusterPairCommand(
         mapping.throttle_to_us(left),
         mapping.throttle_to_us(right),
@@ -138,17 +198,17 @@ def pair_to_manual(
     right_us: float,
     mapping: ThrusterMapping | None = None,
 ) -> tuple[float, float]:
-    """Convert a forward-only PWM pair back to throttle and steering."""
+    """Convert a PWM pair into display/control throttle and steering."""
 
     mapping = mapping or ThrusterMapping()
     left = mapping.pwm_to_throttle(left_us)
     right = mapping.pwm_to_throttle(right_us)
-    total = left + right
-    if total <= 0.02:
+    total_effort = abs(left) + abs(right)
+    if total_effort <= 0.02:
         return 0.0, 0.0
     return (
-        max(0.0, min(1.0, total / 2.0)),
-        max(-1.0, min(1.0, (left - right) / total)),
+        max(0.0, min(1.0, total_effort / 2.0)),
+        max(-1.0, min(1.0, (left - right) / total_effort)),
     )
 
 

@@ -7,6 +7,7 @@ import time
 from thruster_control import (
     ThrusterMapping,
     manual_to_pair,
+    pair_to_manual,
 )
 
 
@@ -23,9 +24,12 @@ class RosCommandBridge:
         max_linear_mps: float = 1.0,
         max_angular_rps: float = 1.0,
         operator_topic: str = "cmd_vel/operator",
+        steering_takeover_topic: str = "control/steering_takeover",
         mode_topic: str = "control/mode_request",
         route_topic: str = "autonomy/route",
+        heading_reset_topic: str = "autonomy/relearn_heading",
         autonomy_status_topic: str = "autonomy/status",
+        thruster_command_topic: str = "thrusters/command",
     ) -> None:
         self.control_state = control_state
         self.mapping = mapping
@@ -33,13 +37,21 @@ class RosCommandBridge:
         self.max_linear_mps = max(0.01, max_linear_mps)
         self.max_angular_rps = max(0.01, max_angular_rps)
         self.operator_topic = operator_topic
+        self.steering_takeover_topic = steering_takeover_topic
         self.mode_topic = mode_topic
         self.route_topic = route_topic
+        self.heading_reset_topic = heading_reset_topic
         self.autonomy_status_topic = autonomy_status_topic
+        self.thruster_command_topic = thruster_command_topic
         self._lock = threading.Lock()
         self._status = "ros-control starting"
         self._waypoints: list[dict] = []
         self._route_version = 0
+        self._heading_reset_version = 0
+        self._steering_takeover_active = False
+        self._steering_takeover = 0.0
+        self._steering_takeover_at: float | None = None
+        self._steering_takeover_timeout_s = 0.35
         self._autonomy_status = {
             "state": "idle",
             "reason": "no route",
@@ -73,7 +85,13 @@ class RosCommandBridge:
 
     def effective_output(self) -> dict:
         with self._lock:
-            return dict(self._effective)
+            return {
+                **self._effective,
+                "steering_takeover": {
+                    "active": self._takeover_active_locked(),
+                    "steering": round(self._steering_takeover, 4),
+                },
+            }
 
     def set_waypoints(self, records: list[dict]) -> dict:
         waypoints = []
@@ -97,13 +115,9 @@ class RosCommandBridge:
         with self._lock:
             self._waypoints = waypoints
             self._route_version += 1
-            self._autonomy_status = {
-                "state": "idle",
-                "reason": "route loaded" if waypoints else "route cleared",
-                "active_index": 0,
-                "total": len(waypoints),
-            }
-        self.control_state.set_auto_status(self.status())
+        # The autonomy node owns route progress. Keep its last confirmed status
+        # until it acknowledges this route update instead of briefly inventing
+        # active_index 0 in the dashboard.
         return self.route_snapshot()
 
     def route_snapshot(self) -> dict:
@@ -111,6 +125,44 @@ class RosCommandBridge:
             return {
                 "waypoints": [dict(item) for item in self._waypoints],
                 "status": dict(self._autonomy_status),
+            }
+
+    def relearn_heading(self) -> dict:
+        with self._lock:
+            self._heading_reset_version += 1
+            self._autonomy_status = {
+                **self._autonomy_status,
+                "state": "acquiring_heading",
+                "reason": "heading reset; drive straight in manual",
+                "heading": {
+                    "state": "uninitialized",
+                    "reason": (
+                        "heading reset; waiting for straight manual motion"
+                    ),
+                    "heading_deg": None,
+                    "source": "uninitialized",
+                    "confidence": "none",
+                },
+            }
+            status = dict(self._autonomy_status)
+        self.control_state.set_auto_status(status)
+        return status
+
+    def set_steering_takeover(
+        self,
+        active: bool,
+        steering: float,
+    ) -> dict:
+        with self._lock:
+            self._steering_takeover_active = bool(active)
+            self._steering_takeover = max(
+                -1.0,
+                min(1.0, float(steering)),
+            )
+            self._steering_takeover_at = time.monotonic()
+            return {
+                "active": self._steering_takeover_active,
+                "steering": round(self._steering_takeover, 4),
             }
 
     def status(self) -> dict:
@@ -139,6 +191,7 @@ class RosCommandBridge:
             enabled=throttle > 0.01,
         )
         with self._lock:
+            takeover = self._takeover_active_locked()
             self._status = status
             self._effective = {
                 "throttle": round(throttle, 4),
@@ -147,6 +200,10 @@ class RosCommandBridge:
                 "right_us": pair.right_us,
                 "send_hz": self.send_hz,
                 "error": error,
+                "steering_takeover": {
+                    "active": takeover,
+                    "steering": round(self._steering_takeover, 4),
+                },
             }
 
     def _run(self) -> None:
@@ -159,7 +216,7 @@ class RosCommandBridge:
                 QoSProfile,
                 ReliabilityPolicy,
             )
-            from std_msgs.msg import String
+            from std_msgs.msg import Empty, Int32MultiArray, String
 
             context = rclpy.context.Context()
             rclpy.init(context=context)
@@ -182,6 +239,16 @@ class RosCommandBridge:
                 self.route_topic,
                 route_qos,
             )
+            steering_takeover_publisher = node.create_publisher(
+                String,
+                self.steering_takeover_topic,
+                10,
+            )
+            heading_reset_publisher = node.create_publisher(
+                Empty,
+                self.heading_reset_topic,
+                10,
+            )
             mode_publisher = node.create_publisher(
                 String,
                 self.mode_topic,
@@ -193,6 +260,12 @@ class RosCommandBridge:
                 self._on_autonomy_status,
                 10,
             )
+            node.create_subscription(
+                Int32MultiArray,
+                self.thruster_command_topic,
+                self._on_thruster_command,
+                10,
+            )
             executor = SingleThreadedExecutor(context=context)
             executor.add_node(node)
         except Exception as exc:
@@ -201,6 +274,7 @@ class RosCommandBridge:
 
         period = 1.0 / self.send_hz
         published_route_version = -1
+        published_heading_reset_version = 0
         try:
             while not self._stop_event.is_set():
                 started = time.monotonic()
@@ -213,6 +287,12 @@ class RosCommandBridge:
                 with self._lock:
                     route_version = self._route_version
                     waypoints = [dict(item) for item in self._waypoints]
+                    heading_reset_version = self._heading_reset_version
+                    takeover_active = (
+                        mode == "auto"
+                        and self._takeover_active_locked()
+                    )
+                    takeover_steering = self._steering_takeover
                 if route_version != published_route_version:
                     route_message = String()
                     route_message.data = json.dumps(
@@ -221,10 +301,25 @@ class RosCommandBridge:
                     )
                     route_publisher.publish(route_message)
                     published_route_version = route_version
+                if heading_reset_version != published_heading_reset_version:
+                    heading_reset_publisher.publish(Empty())
+                    published_heading_reset_version = heading_reset_version
 
                 mode_message = String()
                 mode_message.data = mode
                 mode_publisher.publish(mode_message)
+
+                takeover_message = String()
+                takeover_message.data = json.dumps(
+                    {
+                        "active": takeover_active,
+                        "steering": (
+                            takeover_steering if takeover_active else 0.0
+                        ),
+                    },
+                    separators=(",", ":"),
+                )
+                steering_takeover_publisher.publish(takeover_message)
 
                 if mode == "manual":
                     if not intent.get("stale", False):
@@ -270,27 +365,9 @@ class RosCommandBridge:
         output = status.get("output", {})
         left_us = output.get("left_us")
         right_us = output.get("right_us")
-        throttle = float(output.get("throttle", 0.0))
-        steering = float(output.get("steering", 0.0))
         with self._lock:
             self._autonomy_status = dict(status)
             self._status = "ros-control"
-            self._effective = {
-                "throttle": round(throttle, 4),
-                "steering": round(steering, 4),
-                "left_us": (
-                    self.mapping.neutral_us
-                    if left_us is None
-                    else int(left_us)
-                ),
-                "right_us": (
-                    self.mapping.neutral_us
-                    if right_us is None
-                    else int(right_us)
-                ),
-                "send_hz": self.send_hz,
-                "error": None,
-            }
         if left_us is not None and right_us is not None:
             self.control_state.apply_auto_pwm(
                 int(left_us),
@@ -300,3 +377,35 @@ class RosCommandBridge:
             )
         else:
             self.control_state.set_auto_status(status)
+
+    def _on_thruster_command(self, message) -> None:
+        if len(message.data) < 2:
+            return
+        left_us = int(message.data[0])
+        right_us = int(message.data[1])
+        throttle, steering = pair_to_manual(
+            left_us,
+            right_us,
+            self.mapping,
+        )
+        with self._lock:
+            self._effective = {
+                "throttle": round(throttle, 4),
+                "steering": round(steering, 4),
+                "left_us": left_us,
+                "right_us": right_us,
+                "send_hz": self.send_hz,
+                "error": None,
+                "steering_takeover": {
+                    "active": self._takeover_active_locked(),
+                    "steering": round(self._steering_takeover, 4),
+                },
+            }
+
+    def _takeover_active_locked(self) -> bool:
+        return (
+            self._steering_takeover_active
+            and self._steering_takeover_at is not None
+            and time.monotonic() - self._steering_takeover_at
+            <= self._steering_takeover_timeout_s
+        )

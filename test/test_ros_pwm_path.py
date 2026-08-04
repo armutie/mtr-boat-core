@@ -48,6 +48,18 @@ class RosPwmPathTests(unittest.TestCase):
         self.assertIn("ActuatorArmLatch", thruster)
         self.assertIn("self._arm_latch.armed", thruster)
 
+    def test_heading_relearn_uses_a_dedicated_ros_command(self) -> None:
+        autonomy = Path("boat_ros/autonomy_node.py").read_text(
+            encoding="utf-8",
+        )
+        dashboard = Path("web_dashboard/ros_control.py").read_text(
+            encoding="utf-8",
+        )
+
+        self.assertIn('"autonomy/relearn_heading"', autonomy)
+        self.assertIn("self.controller.relearn_heading()", autonomy)
+        self.assertIn("heading_reset_publisher.publish(Empty())", dashboard)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -25,7 +25,7 @@ from web_dashboard.imu_ros import RosImuReader, empty_imu_record
 
 HOST = "0.0.0.0"
 PORT = 8080
-DASHBOARD_BUILD = "bno-dashboard-v1"
+DASHBOARD_BUILD = "auto-navigator-v1"
 LINUX_TTY_CANDIDATES = [f"/dev/ttyACM{i}" for i in range(3)] + [f"/dev/ttyUSB{i}" for i in range(3)]
 WINDOWS_COM_CANDIDATES = [f"COM{i}" for i in range(1, 13)]
 
@@ -741,6 +741,8 @@ class DashboardState:
         imu_reader: "LiveImuReader | RosImuReader | None",
         log_paths: dict[str, str],
         manual_slew_per_s: float = 0.0,
+        pivot_turn_start: float = 0.75,
+        pivot_reverse_ratio: float = 1.0,
     ):
         self.mmwave_state = mmwave_state
         self.gnss_reader = gnss_reader
@@ -748,6 +750,8 @@ class DashboardState:
         self.log_paths = log_paths
         self.control = ControlState(
             manual_slew_per_s=manual_slew_per_s,
+            pivot_turn_start=pivot_turn_start,
+            pivot_reverse_ratio=pivot_reverse_ratio,
         )
         self.actuator = None
 
@@ -844,9 +848,16 @@ class ControlState:
         self,
         stale_after_s: float = 0.45,
         manual_slew_per_s: float = 0.0,
+        pivot_turn_start: float = 0.75,
+        pivot_reverse_ratio: float = 1.0,
     ) -> None:
         self.stale_after_s = stale_after_s
         self.manual_slew_per_s = max(0.0, manual_slew_per_s)
+        self.pivot_turn_start = max(0.0, min(0.99, pivot_turn_start))
+        self.pivot_reverse_ratio = max(
+            0.0,
+            min(1.0, pivot_reverse_ratio),
+        )
         self._lock = threading.Lock()
         self.mode = "off"
         self.throttle = 0.0
@@ -1050,6 +1061,8 @@ class ControlState:
             reason = self.reason
             stale_after_s = self.stale_after_s
             manual_slew_per_s = self.manual_slew_per_s
+            pivot_turn_start = self.pivot_turn_start
+            pivot_reverse_ratio = self.pivot_reverse_ratio
             auto_status = dict(self.auto_status)
 
         age_s = None if last_update_at is None else round(now - last_update_at, 3)
@@ -1057,8 +1070,34 @@ class ControlState:
         enabled = mode in ("manual", "auto")
         effective_throttle = 0.0 if stale or not enabled else throttle
         effective_steering = 0.0 if stale or not enabled else steering
-        left = max(0.0, min(1.0, effective_throttle * (1.0 + effective_steering)))
-        right = max(0.0, min(1.0, effective_throttle * (1.0 - effective_steering)))
+        steering_magnitude = abs(effective_steering)
+        outer = min(
+            1.0,
+            effective_throttle * (1.0 + steering_magnitude),
+        )
+        inner = effective_throttle * (1.0 - steering_magnitude)
+        if (
+            pivot_reverse_ratio > 0.0
+            and steering_magnitude > pivot_turn_start
+        ):
+            blend = (
+                (steering_magnitude - pivot_turn_start)
+                / (1.0 - pivot_turn_start)
+            )
+            inner_at_start = effective_throttle * (
+                1.0 - pivot_turn_start
+            )
+            inner_at_full = (
+                -effective_throttle * pivot_reverse_ratio
+            )
+            inner = (
+                inner_at_start * (1.0 - blend)
+                + inner_at_full * blend
+            )
+        if effective_steering >= 0.0:
+            left, right = outer, inner
+        else:
+            left, right = inner, outer
 
         if stale:
             reason = f"{mode} command stale; neutral output"
@@ -1080,6 +1119,8 @@ class ControlState:
             "limits": {
                 "manual_slew_per_s": manual_slew_per_s,
                 "stale_after_s": stale_after_s,
+                "pivot_turn_start": pivot_turn_start,
+                "pivot_reverse_ratio": pivot_reverse_ratio,
             },
             "auto_status": auto_status,
             "reason": reason,
@@ -1379,6 +1420,28 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     raise ControlInputError("waypoints must be a list")
                 self.write_json(AUTO_CONTROLLER.set_waypoints(waypoints))
                 return
+            if path == "/api/control/relearn-heading":
+                if AUTO_CONTROLLER is None:
+                    raise ControlInputError("auto controller unavailable")
+                self.write_json(AUTO_CONTROLLER.relearn_heading())
+                return
+            if path == "/api/control/steering-takeover":
+                if AUTO_CONTROLLER is None or not hasattr(
+                    AUTO_CONTROLLER,
+                    "set_steering_takeover",
+                ):
+                    raise ControlInputError(
+                        "steering takeover requires ROS control"
+                    )
+                if not isinstance(payload, dict):
+                    raise ControlInputError("invalid steering takeover")
+                self.write_json(
+                    AUTO_CONTROLLER.set_steering_takeover(
+                        bool(payload.get("active", False)),
+                        float(payload.get("steering", 0.0)),
+                    )
+                )
+                return
         except ValueError as exc:
             self.write_json_error(400, str(exc))
             return
@@ -1531,10 +1594,23 @@ def main() -> None:
         control_hz=float(auto_config.get("control_hz", 10.0)),
         min_speed_for_course_mps=float(auto_config.get("min_speed_for_course_mps", 0.08)),
         gnss_reanchor_speed_mps=float(auto_config.get("gnss_reanchor_speed_mps", 0.3)),
-        gnss_heading_blend=float(auto_config.get("gnss_heading_blend", 0.08)),
+        gnss_heading_blend=float(auto_config.get("gnss_heading_blend", 0.02)),
         gnss_stale_s=float(auto_config.get("gnss_stale_s", 3.0)),
         route_match_tolerance_m=float(auto_config.get("route_match_tolerance_m", 1.0)),
         imu_stale_s=float(auto_config.get("imu_stale_s", 2.0)),
+        heading_command_stale_s=float(auto_config.get("heading_command_stale_s", 0.75)),
+        heading_learn_min_forward_us=int(auto_config.get("heading_learn_min_forward_us", 1565)),
+        heading_learn_max_thruster_delta_us=int(
+            auto_config.get("heading_learn_max_thruster_delta_us", 20)
+        ),
+        heading_learn_duration_s=float(auto_config.get("heading_learn_duration_s", 1.0)),
+        heading_learn_min_samples=int(auto_config.get("heading_learn_min_samples", 5)),
+        heading_course_stability_deg=float(
+            auto_config.get("heading_course_stability_deg", 10.0)
+        ),
+        heading_course_agreement_deg=float(
+            auto_config.get("heading_course_agreement_deg", 45.0)
+        ),
         heading_deadband_deg=float(auto_config.get("heading_deadband_deg", 8.0)),
         yaw_rate_deadband_dps=float(auto_config.get("yaw_rate_deadband_dps", 2.0)),
         yaw_lookahead_s=float(auto_config.get("yaw_lookahead_s", 2.0)),
@@ -1553,6 +1629,24 @@ def main() -> None:
         level1_us=int(auto_config.get("level1_us", thruster_config.get("forward_min_us", 1565))),
         level2_us=int(auto_config.get("level2_us", 1575)),
         level3_us=int(auto_config.get("level3_us", thruster_config.get("forward_max_us", 1650))),
+        reverse_level1_us=int(
+            auto_config.get(
+                "reverse_level1_us",
+                thruster_config.get("reverse_level1_us", 1460),
+            )
+        ),
+        reverse_level2_us=int(
+            auto_config.get(
+                "reverse_level2_us",
+                thruster_config.get("reverse_level2_us", 1445),
+            )
+        ),
+        reverse_level3_us=int(
+            auto_config.get(
+                "reverse_level3_us",
+                thruster_config.get("reverse_level3_us", 1425),
+            )
+        ),
         waypoint=waypoint_cfg,
     )
 
@@ -1650,14 +1744,35 @@ def main() -> None:
         imu_reader,
         log_paths,
         manual_slew_per_s=manual_slew_per_s,
+        pivot_turn_start=float(
+            thruster_config.get("pivot_turn_start", 0.75)
+        ),
+        pivot_reverse_ratio=float(
+            thruster_config.get("pivot_reverse_ratio", 1.0)
+        ),
     )
     mapping = ThrusterMapping(
         neutral_us=int(thruster_config.get("neutral_us", 1500)),
         forward_min_us=int(thruster_config.get("forward_min_us", 1520)),
         forward_max_us=int(thruster_config.get("forward_max_us", 1600)),
+        reverse_level1_us=int(
+            thruster_config.get("reverse_level1_us", 1460)
+        ),
+        reverse_level2_us=int(
+            thruster_config.get("reverse_level2_us", 1445)
+        ),
+        reverse_level3_us=int(
+            thruster_config.get("reverse_level3_us", 1425)
+        ),
         hard_min_us=int(thruster_config.get("hard_min_us", 1350)),
         hard_max_us=int(thruster_config.get("hard_max_us", 2000)),
         steering_slowdown=float(thruster_config.get("steering_slowdown", 0.35)),
+        pivot_turn_start=float(
+            thruster_config.get("pivot_turn_start", 0.75)
+        ),
+        pivot_reverse_ratio=float(
+            thruster_config.get("pivot_reverse_ratio", 1.0)
+        ),
     )
 
     local_auto_controller = None
@@ -1680,6 +1795,12 @@ def main() -> None:
                     "cmd_vel/operator",
                 )
             ),
+            steering_takeover_topic=str(
+                ros_control_config.get(
+                    "steering_takeover_topic",
+                    "control/steering_takeover",
+                )
+            ),
             mode_topic=str(
                 ros_control_config.get(
                     "mode_request_topic",
@@ -1692,10 +1813,22 @@ def main() -> None:
                     "autonomy/route",
                 )
             ),
+            heading_reset_topic=str(
+                ros_control_config.get(
+                    "heading_reset_topic",
+                    "autonomy/relearn_heading",
+                )
+            ),
             autonomy_status_topic=str(
                 ros_control_config.get(
                     "autonomy_status_topic",
                     "autonomy/status",
+                )
+            ),
+            thruster_command_topic=str(
+                ros_control_config.get(
+                    "thruster_command_topic",
+                    "thrusters/command",
                 )
             ),
         )

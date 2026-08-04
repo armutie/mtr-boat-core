@@ -81,6 +81,7 @@ seyond_pointcloud_node:
 control_supervisor_node:
   ros__parameters:
     operator_topic: cmd_vel/operator
+    steering_takeover_topic: control/steering_takeover
     auto_topic: thrusters/auto
     output_topic: thrusters/command
     mode_request_topic: control/mode_request
@@ -91,29 +92,45 @@ control_supervisor_node:
     max_linear_mps: 1.0
     max_angular_rps: 1.0
     throttle_slew_per_s: 0.5
+    direction_change_neutral_s: 0.2
     neutral_us: 1500
     forward_min_us: 1565
     forward_max_us: 1650
+    reverse_level1_us: 1460
+    reverse_level2_us: 1445
+    reverse_level3_us: 1425
     hard_min_us: 1350
     hard_max_us: 2000
+    pivot_turn_start: 0.75
+    pivot_reverse_ratio: 1.0
 
 autonomy_node:
   ros__parameters:
     fix_topic: gnss/fix
     velocity_topic: gnss/velocity
     imu_topic: imu/data
+    diagnostics_topic: diagnostics
+    thruster_command_topic: thrusters/command
     mode_topic: control/mode
     route_topic: autonomy/route
+    heading_reset_topic: autonomy/relearn_heading
     status_topic: autonomy/status
     command_topic: thrusters/auto
     controller: smooth_pd_v1
     control_hz: 10.0
     min_speed_for_course_mps: 0.08
     gnss_reanchor_speed_mps: 0.3
-    gnss_heading_blend: 0.08
+    gnss_heading_blend: 0.02
     gnss_stale_s: 3.0
     route_match_tolerance_m: 1.0
     imu_stale_s: 2.0
+    heading_command_stale_s: 0.75
+    heading_learn_min_forward_us: 1565
+    heading_learn_max_thruster_delta_us: 20
+    heading_learn_duration_s: 1.0
+    heading_learn_min_samples: 5
+    heading_course_stability_deg: 10.0
+    heading_course_agreement_deg: 45.0
     heading_deadband_deg: 8.0
     yaw_rate_deadband_dps: 2.0
     yaw_lookahead_s: 2.0
@@ -132,6 +149,9 @@ autonomy_node:
     level1_us: 1565
     level2_us: 1575
     level3_us: 1650
+    reverse_level1_us: 1460
+    reverse_level2_us: 1445
+    reverse_level3_us: 1425
     reach_radius_m: 2.0
     approach_slow_radius_m: 8.0
 

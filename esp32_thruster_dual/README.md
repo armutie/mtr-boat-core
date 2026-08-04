@@ -96,10 +96,11 @@ USB cannot push the ESCs past the configured envelope.
    ESCs see neutral pulses immediately on their power-up.
 2. After arming you should hear the ESC arming chirp / beep sequence.
 3. Send `PWM L1530 R1530`. Both motors should spin slowly.
-4. Send `PWM L1600 R1400`. Right motor speeds up, left slows. (If they're
-   reversed from what you expect, you wired LEFT and RIGHT backwards — fix it
-   in software by swapping `ESC_LEFT_PIN` and `ESC_RIGHT_PIN`, or in the
-   harness.)
+4. Send `PWM L1600 R1400`. The left channel receives 1600 us and the right
+   channel receives 1400 us. With bidirectional ESCs, that should drive the
+   channels in opposite directions. If the physical motors respond on the
+   opposite sides, the LEFT and RIGHT signal wires are swapped — fix the
+   harness or swap `ESC_LEFT_PIN` and `ESC_RIGHT_PIN` in the sketch.
 5. Send `STOP` and verify both go to a stop.
 
 ## Falling back to the single-channel firmware
