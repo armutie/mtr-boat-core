@@ -21,6 +21,9 @@ def generate_launch_description():
                 package="seyond_mapping",
                 executable="seyond_pointcloud_node",
                 output="screen",
+                additional_env={
+                    "FASTRTPS_DEFAULT_PROFILES_FILE": str(share / "config" / "fastdds.xml"),
+                },
                 parameters=[config],
                 remappings=[("points", "/seyond/points")],
             ),

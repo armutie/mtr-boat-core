@@ -13,17 +13,12 @@
 #include "sensor_msgs/msg/point_field.hpp"
 #include "sensor_msgs/point_cloud2_iterator.hpp"
 
-#include "seyond_mapping/point_fields.hpp"
+#include "seyond_mapping/point_cloud.hpp"
 
 #include "src/sdk_common/inno_lidar_api.h"
 #include "src/sdk_common/inno_lidar_other_api.h"
 #include "src/sdk_common/inno_lidar_packet_utils.h"
 #include "src/utils/inno_lidar_log.h"
-
-namespace {
-constexpr double kUsToSeconds = 1.0e-6;
-constexpr double kTenUsToSeconds = 1.0e-5;
-}
 
 class SeyondPointCloudNode final : public rclcpp::Node {
  public:
@@ -101,75 +96,14 @@ class SeyondPointCloudNode final : public rclcpp::Node {
   }
 
   void publish(const InnoDataPacket &packet) {
-    const bool standard_xyz = packet.type == INNO_ITEM_TYPE_XYZ_POINTCLOUD;
-    const bool enhanced_xyz = CHECK_EN_XYZ_POINTCLOUD_DATA(packet.type);
-    if (!standard_xyz && !enhanced_xyz) return;
-
-    size_t kept = 0;
-    for (uint32_t i = 0; i < packet.item_number; ++i) {
-      float x, y, z;
-      bool second_return;
-      if (standard_xyz) {
-        const auto *points = reinterpret_cast<const InnoXyzPoint *>(packet.payload);
-        x = points[i].x; y = points[i].y; z = points[i].z;
-        second_return = points[i].is_2nd_return;
-      } else {
-        const auto *points = reinterpret_cast<const InnoEnXyzPoint *>(packet.payload);
-        x = points[i].x; y = points[i].y; z = points[i].z;
-        second_return = points[i].is_2nd_return;
-      }
-      const double range = std::sqrt(x * x + y * y + z * z);
-      if (std::isfinite(range) && range >= min_range_ && range <= max_range_ &&
-          (publish_second_return_ || !second_return)) ++kept;
-    }
-    if (kept == 0) return;
-
-    sensor_msgs::msg::PointCloud2 cloud;
+    auto cloud = seyond_mapping::make_point_cloud(
+        packet, min_range_, max_range_, publish_second_return_);
+    if (cloud.width == 0) return;
     cloud.header.frame_id = frame_id_;
     // The D1-R timestamp is device-relative unless external time sync is
     // configured. Stamp at host acquisition so this cloud can be fused with
     // the boat's GNSS, IMU, radar, and camera ROS streams.
     cloud.header.stamp = now();
-    sensor_msgs::PointCloud2Modifier modifier(cloud);
-    modifier.setPointCloud2Fields(
-        5, "x", 1, sensor_msgs::msg::PointField::FLOAT32,
-        "y", 1, sensor_msgs::msg::PointField::FLOAT32,
-        "z", 1, sensor_msgs::msg::PointField::FLOAT32,
-        "intensity", 1, sensor_msgs::msg::PointField::FLOAT32,
-        "time", 1, sensor_msgs::msg::PointField::FLOAT64);
-    modifier.resize(kept);
-
-    sensor_msgs::PointCloud2Iterator<float> out_x(cloud, "x");
-    sensor_msgs::PointCloud2Iterator<float> out_y(cloud, "y");
-    sensor_msgs::PointCloud2Iterator<float> out_z(cloud, "z");
-    sensor_msgs::PointCloud2Iterator<float> out_intensity(cloud, "intensity");
-    sensor_msgs::PointCloud2Iterator<double> out_time(cloud, "time");
-    for (uint32_t i = 0; i < packet.item_number; ++i) {
-      float x, y, z, intensity;
-      double time;
-      bool second_return;
-      if (standard_xyz) {
-        const auto &p = reinterpret_cast<const InnoXyzPoint *>(packet.payload)[i];
-        // D1-R native X=up, Y=right, Z=forward -> REP-103 ROS
-        // X=forward, Y=left, Z=up.
-        x = p.z; y = -p.y; z = p.x; intensity = p.refl;
-        time = p.ts_10us * kTenUsToSeconds;
-        second_return = p.is_2nd_return;
-      } else {
-        const auto &p = reinterpret_cast<const InnoEnXyzPoint *>(packet.payload)[i];
-        x = p.z; y = -p.y; z = p.x;
-        intensity = seyond_mapping::select_enhanced_intensity(
-            packet.use_reflectance, p.reflectance, p.intensity);
-        time = p.ts_10us * kTenUsToSeconds;
-        second_return = p.is_2nd_return;
-      }
-      const double range = std::sqrt(x * x + y * y + z * z);
-      if (!std::isfinite(range) || range < min_range_ || range > max_range_ ||
-          (!publish_second_return_ && second_return)) continue;
-      *out_x = x; *out_y = y; *out_z = z; *out_intensity = intensity; *out_time = time;
-      ++out_x; ++out_y; ++out_z; ++out_intensity; ++out_time;
-    }
-    cloud.is_dense = true;
     publisher_->publish(std::move(cloud));
   }
 

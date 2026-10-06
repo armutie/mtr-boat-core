@@ -74,7 +74,7 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("enable_imu", default_value="true"),
             DeclareLaunchArgument("imu_driver", default_value="bno055"),
             DeclareLaunchArgument("enable_camera", default_value="true"),
-            DeclareLaunchArgument("enable_lidar", default_value="false"),
+            DeclareLaunchArgument("enable_lidar", default_value="true"),
             DeclareLaunchArgument("enable_radar", default_value="false"),
             DeclareLaunchArgument("enable_autonomy", default_value="true"),
             DeclareLaunchArgument("enable_dashboard", default_value="true"),

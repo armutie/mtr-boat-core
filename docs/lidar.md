@@ -18,11 +18,14 @@ The script imports and builds the pinned dependencies, the boat package, and
 
 ## Run
 
-LiDAR startup is opt-in:
+LiDAR starts by default in the boat and sensor launch paths, including the
+headless boat service at boot:
 
 ```bash
-ros2 launch mtr_boat_core sensors.launch.py enable_lidar:=true
+ros2 launch mtr_boat_core sensors.launch.py
 ```
+
+To omit LiDAR for a hardware-free test, pass `enable_lidar:=false`.
 
 For a LiDAR-only test:
 

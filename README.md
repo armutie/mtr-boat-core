@@ -35,7 +35,7 @@ Only the thruster node opens the ESP32 serial port.
 | BNO055 | IMU, orientation, magnetic field, temperature, diagnostics | Default IMU and dashboard source |
 | MPU-6050 | `/imu/data_raw` | Available with `imu_driver:=mpu6050` |
 | Arducam UVC | `/camera/image_raw` and port 8081 viewer | Enabled by default |
-| Seyond D1-R | `/lidar/points` | Opt-in |
+| Seyond D1-R | `/lidar/points` | Enabled by default |
 | TI xWR18xx radar | `/radar/raw_points` | Separate ROS node |
 | ESP32 thrusters | `/thrusters/command` via ROS serial owner | Opt-in |
 
@@ -85,8 +85,8 @@ source install/setup.bash
 ros2 launch mtr_boat_core boat.launch.py
 ```
 
-Open `http://<orange-pi-ip>:8080`. LiDAR, radar, thrusters, and unmeasured
-mounting transforms are disabled by default.
+Open `http://<orange-pi-ip>:8080`. LiDAR is enabled by default; radar, thrusters,
+and unmeasured mounting transforms are disabled by default.
 
 Local configuration is optional. Create `config/ros/boat.local.yaml` or
 `config/boat.local.json` only when hardware placement, camera settings, LiDAR
@@ -100,9 +100,9 @@ service uses those files automatically when they exist.
 ros2 launch mtr_boat_core sensors.launch.py \
   imu_driver:=mpu6050
 
-# Enable the Seyond LiDAR
+# Disable the Seyond LiDAR when testing without it
 ros2 launch mtr_boat_core boat.launch.py \
-  enable_lidar:=true
+  enable_lidar:=false
 
 # Sensor-only bring-up
 ros2 launch mtr_boat_core sensors.launch.py

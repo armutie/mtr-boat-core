@@ -118,7 +118,7 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("camera_roll", default_value="0.0"),
             DeclareLaunchArgument("camera_pitch", default_value="0.0"),
             DeclareLaunchArgument("camera_yaw", default_value="0.0"),
-            DeclareLaunchArgument("enable_lidar", default_value="false"),
+            DeclareLaunchArgument("enable_lidar", default_value="true"),
             DeclareLaunchArgument(
                 "publish_lidar_tf",
                 default_value="false",
@@ -209,6 +209,11 @@ def generate_launch_description() -> LaunchDescription:
                 executable="seyond_pointcloud_node",
                 name="seyond_pointcloud_node",
                 output="screen",
+                additional_env={
+                    "FASTRTPS_DEFAULT_PROFILES_FILE": PathJoinSubstitution(
+                        [FindPackageShare("seyond_mapping"), "config", "fastdds.xml"]
+                    ),
+                },
                 parameters=[params_file],
                 remappings=[("points", "/lidar/points")],
                 respawn=True,

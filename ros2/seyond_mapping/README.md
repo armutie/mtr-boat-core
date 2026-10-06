@@ -27,5 +27,36 @@ The save service writes `maps/handheld_map.pcd` and
 ros2 launch seyond_mapping live_view.launch.py
 ```
 
+Open `http://localhost:8080` on the boat computer. The viewer shows incoming
+FPS, point count, and range. Its indicator turns green only after a point cloud
+arrives; if no clouds arrive for one second it displays a STALE warning. Drag
+to look around, use WASD to move, and select Distance or Height coloring to
+inspect the scene. Pause explicitly freezes the display.
+
+The standalone viewer launch publishes `/seyond/points`. From the repository
+root, after sourcing `/opt/ros/humble/setup.bash`, check its stream with:
+
+```bash
+python3 scripts/check_lidar_health.py --topic /seyond/points --duration 30
+```
+
+For the boat launch or an isolated driver remapped to `/lidar/points`, omit
+`--topic`. PASS requires at least 8 Hz, no gap exceeding 0.5 seconds, consistent
+message dimensions/buffer sizes, increasing timestamps, and finite sampled
+XYZ coordinates. This checks stream health, not physical mounting/calibration
+or every individual point.
+
+The point-cloud conversion filters once into a buffer sized for the input
+point count, then shrinks the buffer. The previous count/write passes evaluated
+the range with different floating-point addition orders; points near a range
+cutoff could be rejected while counting and accepted while writing, causing
+a heap-buffer overflow. `test_point_cloud` includes a reproducer for that case.
+
+The driver launch paths also load `config/fastdds.xml`, which increases its
+Fast DDS shared-memory segment from 512 KB to 8 MB for large clouds. The
+profile applies to the driver process; it does not change system-wide
+network or memory settings. Direct executable launches should set
+`FASTRTPS_DEFAULT_PROFILES_FILE` to that file's absolute path.
+
 This package is Apache-2.0 licensed. Seyond's SDK and KISS-ICP retain their
 respective upstream licenses.
